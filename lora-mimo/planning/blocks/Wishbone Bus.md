@@ -21,7 +21,7 @@ Wishbone B4 shared bus connecting PicoRV32 (master) to all on-chip peripherals (
 | `0x10100`–`0x101FF` | SPI master | SX1257 config writes |
 | `0x10200`–`0x102FF` | IRQ controller | Source read/clear |
 | `0x10300`–`0x103FF` | SWD TAP | Debug interface |
-| `0x20000`–`0x5FFFF` | Baseband SRAM (via arbiter) | Sample capture / FFT staging |
+| `0x20000`–`0xA7FFF` | Baseband SRAM (via arbiter) | FFT staging + guarded sample capture |
 
 ---
 

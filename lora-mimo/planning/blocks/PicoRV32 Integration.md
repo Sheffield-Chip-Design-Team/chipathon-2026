@@ -19,8 +19,8 @@ PicoRV32 RV32IM soft-core CPU managing all timing-sensitive and algorithmic task
 
 | Task | Trigger | Latency budget |
 | --- | --- | --- |
-| MRC weight computation | Correlator lock (NT=1) | << 1 LoRa symbol (~32 ms at SF12) |
-| ALMMSE weight computation | Correlator lock (NT=2) | << 1 LoRa symbol |
+| MRC weight computation | FFT `h_ready` (NT=1) | << 1 LoRa symbol (~32 ms at SF12) |
+| ALMMSE weight computation | FFT `h_ready` (NT=2) | << 1 LoRa symbol |
 | TX preparation (RX→TX) | `tx_prep` IRQ from TX_CTRL[0] | < 1 ms (LoRaWAN RX1 budget = 1 s) |
 | TX restore (TX→RX) | `tx_done` IRQ from TX_CTRL[1] | < 1 ms |
 | AGC loop | Per-packet energy update | < 1 packet |
@@ -149,40 +149,57 @@ Firmware implements an exponential moving average in DMEM — no RTL changes req
 int16 H_prev_re[4][2], H_prev_im[4][2];
 uint16_t N0_prev[4];
 
-// On each corr_lock IRQ:
+// IRQ_STATUS bits:
+#define IRQ_CORR_LOCK        (1u << 0)
+#define IRQ_H_READY          (1u << 1)
+#define IRQ_W_MISSED_PACKET  (1u << 2)
+
 void irq_handler() {
-    agc_update();                            
+    uint8_t irq = read_reg(IRQ_STATUS);
 
-    // Saturation check: if any antenna was saturating, discard this packet
-    bool saturated = false;
-    for (int n = 0; n < 4; n++)
-        if (read_energy(n) > AGC_SAT_GUARD) { saturated = true; break; }
-
-    if (!saturated) {
-        read_H_registers(H_new_re, H_new_im);   // from 0x70-0x8F
-        read_N0_registers(N0_new);               // from 0xB0-0xB7
-
-        // EMA: reset if any antenna's gain changed (H and N0 scale with gain)
-        if (ema_reset_pending) {
-            H_prev = H_new;  
-            N0_prev = N0_new;
-            ema_reset_pending = false;
-        } else {
-            // H_avg = H_prev + (H_new - H_prev) >> H_ALPHA_SHIFT
-            // N0_avg = N0_prev + (N0_new - N0_prev) >> N0_ALPHA_SHIFT
-            for each element:
-                H_avg = H_prev + ((H_new - H_prev) >> H_ALPHA_SHIFT);
-            for each antenna:
-                N0_avg = N0_prev + ((N0_new - N0_prev) >> N0_ALPHA_SHIFT);
-            H_prev = H_avg;
-            N0_prev = N0_avg;
-        }
-
-        compute_W(H_avg, N0_avg);
-        write_W_registers(W);                    // to 0x90-0xAF
+    if (irq & IRQ_CORR_LOCK) {
+        agc_update();
+        clear_irq(IRQ_CORR_LOCK);
     }
 
-    clear_irq(0x10200);
+    if (irq & IRQ_H_READY) {
+        // Saturation check: if any antenna was saturating, discard this packet
+        bool saturated = false;
+        for (int n = 0; n < 4; n++)
+            if (read_energy(n) > AGC_SAT_GUARD) { saturated = true; break; }
+
+        if (!saturated) {
+            read_H_registers(H_new_re, H_new_im);   // from 0x70-0x8F
+            read_N0_registers(N0_new);              // from 0xB0-0xB7
+
+            // EMA: reset if any antenna's gain changed (H and N0 scale with gain)
+            if (ema_reset_pending) {
+                H_prev = H_new;
+                N0_prev = N0_new;
+                ema_reset_pending = false;
+            } else {
+                // H_avg = H_prev + (H_new - H_prev) >> H_ALPHA_SHIFT
+                // N0_avg = N0_prev + (N0_new - N0_prev) >> N0_ALPHA_SHIFT
+                for each element:
+                    H_avg = H_prev + ((H_new - H_prev) >> H_ALPHA_SHIFT);
+                for each antenna:
+                    N0_avg = N0_prev + ((N0_new - N0_prev) >> N0_ALPHA_SHIFT);
+                H_prev = H_avg;
+                N0_prev = N0_avg;
+            }
+
+            compute_W(H_avg, N0_avg);
+            write_W_shadow_registers(W);            // to 0x90-0xAF
+            write_reg(W_CTRL, W_COMMIT);
+        }
+
+        clear_irq(IRQ_H_READY);
+    }
+
+    if (irq & IRQ_W_MISSED_PACKET) {
+        stats.w_missed++;
+        clear_irq(IRQ_W_MISSED_PACKET);
+    }
 }
 ```
 
@@ -242,7 +259,7 @@ void drift_compensation() {
 
 ### AGC loop
 
-Triggered at each correlator lock IRQ, after W computation. Reads per-antenna energy (latched at preamble lock by the Energy Detector) and adjusts each SX1257's `RegRxAnaGain` (0x0C) independently.
+Triggered at each `IRQ_STATUS.CORR_LOCK`, independent of the later `IRQ_STATUS.H_READY` W-computation path. Reads per-antenna energy latched at preamble lock by the Energy Detector and adjusts each SX1257's `RegRxAnaGain` (0x0C) independently.
 
 **SX1257 RegRxAnaGain (0x0C) layout:**
 
@@ -359,10 +376,10 @@ Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORREL
 
 | Address | Region | Size | Notes |
 | --- | --- | --- | --- |
-| `0x00000` | IMEM (instruction) | 16 KB | Loaded by host via SPI; PicoRV32 fetches from here |
-| `0x04000` | DMEM (data/stack) | 16 KB | Separate OpenRAM macro |
+| `0x00000` | IMEM (instruction) | 32 KB | Loaded by host via SPI; PicoRV32 fetches from here |
+| `0x08000` | DMEM (data/stack) | 32 KB | Separate OpenRAM macro |
 | `0x10000` | Wishbone peripherals | — | Register bank, SPI master, IRQ, SWD |
-| `0x20000` | Baseband SRAM | 384 KB | Shared with FFT engine via arbiter |
+| `0x20000` | Baseband SRAM | 544 KB | Shared with FFT engine via arbiter |
 
 ---
 
@@ -391,7 +408,7 @@ Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORREL
 4. PicoRV32 fetches from 0x00000; executes SX1257 init, then waits for IRQ
 ```
 
-**IRQ.** Correlator lock generates an IRQ to PicoRV32. Firmware reads H/N₀ from registers, computes W, writes W back, then signals "W ready" to combiner. All within one symbol period.
+**IRQ.** Schmidl-Cox lock arms capture/FFT, but W computation starts from the FFT `h_ready` IRQ. Firmware reads H/N₀ from registers, computes W, writes `W_SHADOW`, then asserts the W commit strobe. Hardware copies `W_SHADOW` into `W_ACTIVE` atomically at the next idle boundary and sets `W_valid`. The live combiner falls back to the selected bypass antenna until `W_valid` is set. If firmware finishes while a packet is active, it leaves that packet in bypass and commits W for the next packet.
 
 ---
 
@@ -413,7 +430,8 @@ Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORREL
 - [Wishbone Bus](Wishbone%20Bus.md) — interconnect
 - [Baseband SRAM](Baseband%20SRAM.md) — shared memory
 - [SPI Master](SPI%20Master.md) — SX1257 config
-- [IRQ Controller](IRQ%20Controller.md) — correlator lock IRQ
-- [Correlator Bank](Correlator%20Bank.md) — H/N₀ source
+- [IRQ Controller](IRQ%20Controller.md) — `h_ready`, packet, and TX IRQs
+- [Packet Control FSM](Packet%20Control%20FSM.md) — packet phase, safe W commit, W missed status
+- [FFT Engine](FFT%20Engine.md) — H/N₀/eps_sub source
 - [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — W register target
 - [Register Map](../Register%20Map.md) — `CPU_RESET` at `0x02`

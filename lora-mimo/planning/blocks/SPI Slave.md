@@ -27,7 +27,7 @@ SPI slave providing the RPi (SPI0 CS1) with register read/write access to all AS
 | `reg_wdata` | out | 8 | Write data |
 | `reg_we` | out | 1 | Write enable to register bank |
 | `reg_rdata` | in | 8 | Read data from register bank |
-| `sram_addr` | out | 19 | Address for SRAM burst read (0x08000–0x5FFFF) |
+| `sram_addr` | out | 20 | Address for SRAM burst read (Baseband SRAM `0x00000`–`0x87FFF`; normal capture readback `0x40000`–`0x87FFF`) |
 | `sram_rdata` | in | 32 | Read data from Baseband SRAM |
 | `sram_req` | out | 1 | SRAM bus request |
 | `sram_grant` | in | 1 | SRAM bus grant from arbiter |
@@ -51,7 +51,7 @@ Byte 0: 0x80 | burst_flag | high_addr
 Byte 1: low_addr
 Bytes 2…N+1: MISO returns consecutive SRAM bytes, address auto-increments
 ```
-Host reads back the 352 KB capture region at up to 10 MHz (35.2 MB/s theoretical; limited by SPI clock).
+Host reads back the 288 KB capture region (`0x40000`–`0x87FFF`) at up to 10 MHz. The two-byte burst command supplies an offset within the capture window; the SPI slave adds `0x40000` for normal capture readback. Direct full-SRAM diagnostic addressing, if needed, should use an extended command because the Baseband SRAM address is now 20 bits.
 
 **Firmware load (burst write to IMEM):**
 ```
@@ -91,6 +91,6 @@ Write CPU_RESET=0 (0x02 ← 0x00)
 ## Related blocks
 
 - [Register Map](../Register%20Map.md) — all register addresses
-- [Baseband SRAM](Baseband%20SRAM.md) — burst read source (0x08000–0x5FFFF)
+- [Baseband SRAM](Baseband%20SRAM.md) — burst read source (`0x40000`–`0x87FFF` capture region)
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — IMEM target for firmware load; CPU_RESET register
 - [Wishbone Bus](Wishbone%20Bus.md) — internal bus for register access

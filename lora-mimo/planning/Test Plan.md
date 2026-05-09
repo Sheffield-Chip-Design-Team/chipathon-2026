@@ -133,7 +133,7 @@
 | Sine at −6 dBFS | SQNR > 80 dB after Python decimation |
 | Input at 0 dBFS | Integrators saturate, no runaway |
 | DC input | Output bitstream average matches DC value |
-| Re-mod B tristated (Mode 1) | No signal on REMOD_B_I/Q pads |
+| Re-mod B idle (Mode 1) | REMOD_B_I/Q pads driven to defined idle level |
 
 ---
 
@@ -143,7 +143,7 @@
 
 **Method:**
 - cocotb testbench simulates RPi SPI master; write and read back every defined register
-- Burst read of capture SRAM region (0x08000 onward)
+- Burst read of capture SRAM region (`0x40000`–`0x87FFF`)
 - Firmware load sequence: assert CPU_RESET, load test binary, de-assert, verify PicoRV32 fetches from 0x0000
 
 ---

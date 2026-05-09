@@ -1,17 +1,24 @@
 # FFT Engine
 
-RX path stage 5. See [DSP Flow](../DSP%20Flow.md) for context.
+RX path stage 4. See [DSP Flow](../DSP%20Flow.md) for context.
 
 **Owner:** TBD
-**Status:** Updated for 2× oversampling
+**Status:** Updated for RCTSL support
 
 ---
 
 ## Function
 
-Iterative radix-2 FFT on dechirped complex I+Q samples for all 4 antennas. Supports native $f_s = BW$ mode and $2\times$ oversampled $f_s = 2 \cdot BW$ mode for increased CFO breathing room.
+Multi-lane radix-2 FFT on dechirped complex I+Q samples for all 4 antennas.
 
-**Goal:** Transform dechirped preamble symbols into the frequency domain for bin refinement and SNR estimation.
+**Goal:** Transform dechirped preamble symbols into the frequency domain for fine frequency (CFO) refinement, timing alignment, and channel estimation.
+
+**Preamble Acquisition Flow (3-pass):**
+1. **Pass 1 — Fine CFO (RCTSL):** Concatenates 8 dechirped symbols and performs an **unpadded live FFT**. Applies the RCTSL quadratic correction to find `eps_sub`. A 2× zero-padded mode is optional for SF7/SF8 validation or diagnostics, not required for the live path.
+2. **Pass 2 — Coarse Integer Bin:** Performs a standard length-$M$ FFT on dechirped samples (corrected by `eps_sub` in the time domain) to find the integer bin `k_peak`.
+3. **Pass 3 — Coherent Channel Estimation:** Accumulates $D_j[s][k\_peak]$ across symbols to produce the final channel matrix `H`.
+
+The FFT engine starts only after the capture controller has made the 8-symbol live RCTSL window resident in SRAM. Schmidl-Cox lock is a capture event, not an immediate FFT-compute event, and diagnostic post-guard capture must not block the live FFT trigger.
 
 ---
 
@@ -19,18 +26,19 @@ Iterative radix-2 FFT on dechirped complex I+Q samples for all 4 antennas. Suppo
 
 | Port | Direction | Width | Rate | Description |
 | --- | --- | --- | --- | --- |
-| `trigger` | in | 1 | — | From Schmidl-Cox `sc_lock` (preamble acq) or firmware (payload/diagnostics) |
+| `trigger` | in | 1 | — | From live capture-ready FSM (preamble acq) or firmware (payload/diagnostics) |
+| `timing_ref` | in | 32 | — | Estimated preamble-start sample index from Schmidl-Cox, in `iq_valid` units |
 | `sf` | in | 3 | static | Spreading factor: 0=SF5 … 7=SF12 |
-| `os_mode` | in | 1 | static | Oversampling mode: 0=$f_s=BW$ (1×), 1=$f_s=2\cdot BW$ (2×) |
 | `iq_valid` | in | 1 | $f_s$ | Master sample strobe — used as **Clock Enable** |
-| `fft_active` | out | 1 | — | High during READ/COMPUTE/PEAK — pauses capture writes |
+| `fft_active` | out | 1 | — | High during READ/COMPUTE/PEAK — capture window is already frozen |
 | `clk_32m` | in | — | 32 MHz | Master clock |
 | `rst_n` | in | — | — | Active-low reset |
 | `fft_done` | out | 1 | — | Pulses high when all 4 antennas computed |
-| `sram_addr` | out | 19 | — | Address into Baseband SRAM |
+| `sram_addr` | out | 20 | — | Address into Baseband SRAM |
 | `sram_wdata` | out | 32 | — | Write data |
 | `sram_rdata` | in | 32 | — | Read data |
 | `sram_we` | out | 1 | — | Write enable |
+| `eps_sub` | out | 16 signed Q1.15 | — | Fractional CFO estimate from Pass 1 |
 
 ---
 
@@ -38,31 +46,44 @@ Iterative radix-2 FFT on dechirped complex I+Q samples for all 4 antennas. Suppo
 
 | Parameter | Value | Notes |
 | --- | --- | --- |
-| Max FFT size ($N_{max}$) | 8192 points | Supports SF12 at 2× oversampling |
-| FFT working buffer | 32 KB | `0x00000`–`0x07FFF` (exactly 8192 complex int16) |
-| Samples per symbol ($N_{sym}$) | $2^{SF} \cdot (1 + os\_mode)$ | Either $M$ or $2M$ |
-| Chirp NCO step | $1 / N_{sym}$ | Q-format; scales with $SF$ and $os\_mode$ |
-| Butterfly unit | 1 (reused, iterative) | 4 real MUL + 6 ADD |
-| Total cycles (SF12, 2×) | ~50K read + 53,248 compute | ~6.5 ms per 4 antennas at 32 MHz |
+| Live max FFT size ($N_{max}$) | 32,768 points | 8-symbol unpadded RCTSL for SF12 (`8 × 4096`) |
+| Optional padded FFT size | 65,536 points | 2× zero-padded diagnostic/refinement mode, not live-path mandatory |
+| Live FFT working buffer | 128 KB | 32,768 complex int16 |
+| Optional padded buffer | 256 KB | Required only if 65,536-point diagnostic mode is implemented |
+| Butterfly lanes | 2 minimum, 4 preferred | Shared controller with multiple radix-2 butterfly lanes |
+| Live SF12 4-antenna compute target | ≤30 ms at 32 MHz | Stretch target ≤15 ms |
+| Capture guard | 0.5M pre + 0.5M post | Capture window is 9M samples per antenna |
 
 ---
 
 ## Implementation notes
 
-**Flexible Transform Length.** The FSM must handle $N$ ranging from 32 (SF5, 1×) to 8192 (SF12, 2×). The number of passes is $\log_2(N)$.
+**Flexible Transform Length.** The live FSM must handle $N$ ranging from 32 (SF5 single-symbol passes) to 32,768 (8-symbol RCTSL SF12). If optional padded mode is implemented, it must also handle 65,536-point transforms. The number of passes is $\log_2(N)$.
 
-**Chirp NCO.** The quadratic-phase NCO uses `step = 1.0 / N_sym`.
-*   If `os_mode = 0`: $N_{sym} = 2^{SF}$.
-*   If `os_mode = 1`: $N_{sym} = 2^{SF+1}$.
-This ensures the reference chirp slope matches the incoming signal rate exactly.
+**RCTSL Pass.** Pass 1 reads 8 symbols from capture SRAM, dechirps them into the live staging buffer, performs the unpadded FFT, and then the PicoRV32 (or a hardwired quadratic block) computes `eps_sub` using the magnitudes around the peak. Zero padding does not add information; it only samples the same spectrum more densely, so it is reserved for optional diagnostics or low-SF validation if timing and SRAM budget allow.
 
-**Bit-Reversal.** Samples are bit-reversed based on the current transform length $N$ during the READ phase.
+The 8 symbols are addressed relative to `timing_ref`, not relative to the Schmidl-Cox lock edge:
 
-**Memory Reuse.** The READ phase writes 16-bit dechirped samples (I,Q) to the working buffer. The COMPUTE phase performs the FFT in-place. The final PEAK scan reads the same buffer. For 8192 points, the buffer is 100% utilized.
+```
+symbol0_addr = capture_addr(timing_ref)
+symbol_s_addr = capture_addr(timing_ref + s*M)
+```
 
-**Bin Interpretation.**
-*   In **1× mode**, the full FFT bandwidth equals $BW$.
-*   In **2× mode**, the signal bandwidth occupies the center half ($[N/4, 3N/4]$). The FFT engine's PEAK search should be restricted to this range to avoid locking on alias artifacts or out-of-band noise.
+The capture window itself begins at `timing_ref - M/2`, so the FFT can tolerate residual Schmidl-Cox timing error and still read a deterministic 8-symbol slice.
+
+**Integer Bin Pass.** Pass 2 uses `eps_sub` to apply a phase rotation during the dechirp read phase, then performs a standard single-symbol FFT to find the integer peak.
+
+**Butterfly parallelism.** The live implementation should not be a one-butterfly serial engine. Use a shared FFT controller with at least 2 butterfly lanes; 4 lanes is preferred if staging SRAM banking and area allow. The staging memory must be organized so the extra lanes are useful rather than blocked by a single-port bottleneck.
+
+**Memory Reuse.** The live 128 KB buffer is used for all three passes. Pass 1 uses it for the 8-symbol RCTSL FFT; Pass 2 and 3 use it for single-symbol FFT staging and result storage. If optional padded mode is implemented, the staging region may grow to 256 KB.
+
+**Live capture handoff.** The preamble-acquisition FSM sequence is:
+
+1. Schmidl-Cox asserts `sc_lock` and provides `timing_ref`.
+2. Capture controller waits until the 8-symbol live RCTSL window (`timing_ref` through `timing_ref + 8M - 1`) is resident in sample capture SRAM.
+3. Capture controller freezes or protects the live window and asserts FFT `trigger`.
+4. FFT reads the 8-symbol RCTSL input starting at `timing_ref`.
+5. Capture may continue filling diagnostic pre/post guard samples, but those samples must not delay live RCTSL.
 
 ---
 
@@ -70,19 +91,20 @@ This ensures the reference chirp slope matches the incoming signal rate exactly.
 
 | Test | Method | Pass criterion |
 | --- | --- | --- |
-| **NCO & Dechirp** | Inject pure chirp signal | Buffer contains DC (constant-phase) signal post-dechirp |
+| **RCTSL Accuracy** | Inject ±0.3 bin CFO | Live unpadded RCTSL `eps_sub` estimate within target error; compare optional 2× padded mode if implemented |
 | **FFT Butterfly** | Inject single-bin pulse | Output matches `np.fft.fft()` to ±2 LSB |
 | **Bit-Reversal** | Verify buffer ordering | Data indexed correctly for butterfly stages |
 | **In-place SRAM** | Run full COMPUTE sequence | Buffer transformed without data corruption |
-| **2× Oversampling** | Inject noise in outer bins | PEAK search ignores outer half; only center bins considered |
-| **Full Pipeline** | Synthetic LoRa preamble | Lock trigger → FFT peak bin matches expected freq offset |
-| **Max Size (8192)** | Run SF12 in 2× mode | Transform completes; no SRAM overflow |
+| **Lane parallelism** | Run SF12 4-antenna RCTSL | Completes within ≤30 ms at 32 MHz |
+| **Capture handoff** | Synthetic preamble with random timing offset | `sc_lock` → live 8-symbol window ready → FFT reads 8 symbols from `timing_ref` |
+| **3-Pass Sequence** | Synthetic LoRa preamble | Capture trigger → Correct H matrix and `eps_sub` produced |
 
 ---
 
 ## Related blocks
 
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — provides `iq_valid`
-- [Schmidl-Cox Preamble Detector](Correlator%20Bank.md) — asserts `sc_lock` to start preamble acquisition
-- [Baseband SRAM](Baseband%20SRAM.md) — provides 32 KB storage
-- [Register Map](../Register%20Map.md) — `os_mode` from global control
+- [Packet Control FSM](Packet%20Control%20FSM.md) — triggers live RCTSL when the 8-symbol window is resident
+- [Schmidl-Cox Preamble Detector](Correlator%20Bank.md) — asserts `sc_lock` and provides `timing_ref`
+- [Baseband SRAM](Baseband%20SRAM.md) — provides live FFT staging and guarded capture storage
+- [Register Map](../Register%20Map.md) — `sf` and peak diagnostic registers

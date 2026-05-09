@@ -64,8 +64,9 @@ graph LR
 
         subgraph detection["Preamble Detection & Channel Estimation"]
             direction TB
-            SC["Schmidl-Cox Detector\nsliding 2M autocorr\nsc_lock · timing_ref · ε_sub"]
-            FFT["FFT Engine\niterative radix-2\nSF5–SF12 (M=32–4096)\ntriggered by sc_lock\n2-pass: k_peak → H matrix"]
+            SC["Schmidl-Cox Detector\nsliding magnitude autocorr\nsc_lock · timing_ref"]
+            PCFSM["Packet Control FSM\npacket phase · safe_switch\nlive_fft_ready · W gating"]
+            FFT["FFT Engine\nmulti-lane radix-2\nSF5–SF12 (M=32–4096)\nlive: unpadded 8-symbol RCTSL\n3-pass: eps_sub → k_peak → H"]
         end
 
         subgraph combining["ALMMSE / MRC Combining"]
@@ -79,7 +80,7 @@ graph LR
         subgraph ctrl["Control Plane"]
             direction TB
             PICO["PicoRV32\nRV32IM\nW matrix computation\nTDD switching\nAGC loop"]
-            BSRAM["Baseband SRAM\n384 KB\n0x00000–0x07FFF FFT staging\n0x08000–0x5FFFF sample capture"]
+            BSRAM["Baseband SRAM\n544 KB\n0x00000–0x3FFFF FFT staging\n0x40000–0x87FFF sample capture"]
             SPIS["SPI Slave\nRPi SPI0 CS1\nconfig + FW load"]
             SPIM["SPI Master\n→ SX1257 config\n(shared MOSI/MISO/SCK)"]
             SWDTAP["SWD TAP\nPicoRV32 debug"]
@@ -90,9 +91,17 @@ graph LR
 
         D1 & D2 & D3 & D4 --> SC
         D1 & D2 & D3 & D4 --> COMB
-        SC -->|"sc_lock · timing_ref · ε_sub"| FFT
-        FFT -->|"H matrix · N₀\nh_ready"| PICO
+        D1 & D2 & D3 & D4 -->|"raw int8 IQ capture"| BSRAM
+        SC -->|"sc_lock · timing_ref"| PCFSM
+        SC -->|"sc_lock · timing_ref"| BSRAM
+        PCFSM -->|"live_fft_ready · capture_protect"| BSRAM
+        BSRAM -->|"timing_ref\nprotected 8-symbol window"| FFT
+        PCFSM -->|"trigger"| FFT
+        FFT -->|"H matrix · N₀ · eps_sub\nh_ready"| PICO
+        FFT -->|"h_ready"| PCFSM
+        PICO -->|"W_SHADOW · W_commit"| PCFSM
         PICO -->|"W matrix\n(int16)"| COMB
+        PCFSM -->|"safe_switch · W_valid\nactive mode/antenna"| COMB
     end
 
     CHIP --> chip_internals
@@ -291,19 +300,19 @@ The following boundaries require explicit CDC treatment:
 | --- | --- | --- |
 | ΣΔ Decimator ×4 (CIC + FIR) | ~12,000 | |
 | Schmidl-Cox Detector (ring buf + autocorr + CORDIC) | ~4,000 | |
-| FFT Engine (iterative, SF5–SF12) | ~9,500 | |
+| FFT Engine (iterative, SF5–SF12) | ~10,000 | |
 | ALMMSE/MRC Combiner | ~10,000 | |
 | ΣΔ Re-mod ×2 | ~1,400 | |
 | PicoRV32 RV32IM | ~10,000 | |
 | SPI Slave + SPI Master + Wishbone | ~5,000 | |
 | Status register bank | ~1,000 | |
 | IRQ + misc | ~800 | |
-| **Logic total** | **~53,700 GE** | **~0.65 mm²** |
-| Baseband SRAM (384 KB) | — | ~TBD (SRAM compiler) |
-| PicoRV32 IMEM+DMEM (16 KB) | — | ~0.13 mm² |
-| **Total** | | **~2.96 mm² + SRAM TBD** |
+| **Logic total** | **~54,200 GE** | **~0.66 mm²** |
+| Baseband SRAM (544 KB) | — | ~4.50 mm² |
+| PicoRV32 IMEM+DMEM (64 KB) | — | ~0.52 mm² |
+| **Total** | | **~5.68 mm²** |
 
-> SRAM area is the critical unknown. Run GF180MCU OpenRAM compiler for 384 KB and 16 KB macros before committing to final floorplan. Scaled estimate ~3.15 mm² for 384 KB — verify before tapeout.
+> SRAM area is the critical constraint. Run GF180MCU OpenRAM compiler for 544 KB and 64 KB macros before committing to final floorplan. If a single 544 KB macro is impractical, split Baseband SRAM into 256 KB FFT staging and 288 KB capture macros.
 
 ---
 
@@ -331,7 +340,7 @@ Mode auto-switches per frame (auto mode only); returns to Mode 1 on frame end. S
 | ALMMSE/MRC Combiner | TBD | — |
 | ΣΔ Re-mod ×2 | TBD | — |
 | PicoRV32 RV32IM integration | TBD | — |
-| Baseband SRAM (384 KB OpenRAM) | TBD | — |
+| Baseband SRAM (544 KB OpenRAM) | TBD | — |
 | PicoRV32 SRAM (16 KB OpenRAM) | TBD | — |
 | SPI Slave (host interface) | TBD | — |
 | SPI Master (→ SX1257) | TBD | — |

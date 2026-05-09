@@ -34,7 +34,7 @@ gantt
     Wishbone Bus                         :cb4,  2026-05-09, 10d
     IRQ Controller                       :cb3,  2026-05-23, 7d
     SPI Master + Slave                   :cb1,  2026-05-09, 21d
-    OpenRAM (384 KB + 16 KB)             :crit, cm1,  2026-05-09, 14d
+    OpenRAM (544 KB + 64 KB)             :crit, cm1,  2026-05-09, 14d
     PicoRV32 integration + arbiter       :crit, cm3,  2026-05-18, 21d
 
     section Software

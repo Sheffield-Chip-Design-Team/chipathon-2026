@@ -19,7 +19,7 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x11` | `SF_CFG` | R/W | `0x07` | FFT Engine | [2:0] sf (0=SF5, 1=SF6, … 7=SF12); [7:3] reserved |
 | `0x12` | `CAPTURE_CTRL` | R/W | `0x00` | Baseband SRAM | [0] CAPTURE_EN (write 1 to arm); [1] CAPTURE_MODE (0=raw samples, 1=FFT output); [7:2] reserved |
 | `0x13` | `CAPTURE_STATUS` | R | `0x00` | Baseband SRAM | [0] CAPTURE_DONE; [1] CAPTURE_OVERFLOW; [7:2] reserved |
-| `0x14` | `CAPTURE_PTR_HI` | R | `0x00` | Baseband SRAM | Capture write pointer [18:16] — current write position in capture RAM |
+| `0x14` | `CAPTURE_PTR_HI` | R | `0x00` | Baseband SRAM | Capture write pointer [19:16] — current write position in capture RAM |
 | `0x15` | `CAPTURE_PTR_MID` | R | `0x00` | Baseband SRAM | Capture write pointer [15:8] |
 | `0x16` | `CAPTURE_PTR_LO` | R | `0x00` | Baseband SRAM | Capture write pointer [7:0]; frozen while `fft_active` |
 | `0x17` | `TX_CTRL` | R/W | `0x00` | PicoRV32 FW | [0] TX_PREP; [1] TX_DONE; [2] TX_ACTIVE |
@@ -27,6 +27,8 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x19` | `ENERGY_THR_LO` | R/W | `0x00` | Energy Detector | Energy detector threshold [7:0] |
 | `0x1A` | `LOW_BAT_THR` | R/W | `0x02` | Control | Low battery threshold configuration |
 | `0x1B` | `DECIM_CFG` | R/W | `0x00` | ΣΔ Decimator | [1:0] DECIM_RATIO: 0=32× (1 MHz), 1=64× (500 kHz), 2=128× (250 kHz), 3=256× (125 kHz); [7:2] reserved |
+| `0x1C` | `SC_THR_HI` | R/W | `0x73` | Schmidl-Cox | Detection threshold θ_SC [15:8] (Q1.15); default 0.90 |
+| `0x1D` | `SC_THR_LO` | R/W | `0x33` | Schmidl-Cox | Detection threshold θ_SC [7:0] |
 | **Frequency Configuration** (`0x20`–`0x2F`) | | | | | |
 | `0x20` | `DELTA_F_HI` | R/W | `0x00` | Correlator Bank | Δf between NT=2 node frequencies [15:8], in Hz |
 | `0x21` | `DELTA_F_LO` | R/W | `0x00` | Correlator Bank | Δf [7:0], in Hz |
@@ -45,6 +47,13 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x44` | `SNR_0_LO` | R | `0x00` | PicoRV32 FW | SNR node 0 [7:0] |
 | `0x45` | `SNR_1_HI` | R | `0x00` | PicoRV32 FW | Post-combining SNR for node 1 [15:8] (NT=2 only) |
 | `0x46` | `SNR_1_LO` | R | `0x00` | PicoRV32 FW | SNR node 1 [7:0] |
+| `0x47` | `SC_STAT_HI` | R | `0x00` | Schmidl-Cox | Current Λ²[s] magnitude-squared value [15:8] (Q4.12) |
+| `0x48` | `SC_STAT_LO` | R | `0x00` | Schmidl-Cox | Current Λ²[s] magnitude-squared value [7:0] |
+| `0x49` | `IRQ_STATUS` | R | `0x00` | IRQ Controller | Sticky IRQ source bits: [0] CORR_LOCK, [1] H_READY, [2] W_MISSED_PACKET, [3] CAPTURE_DONE, [4] CAPTURE_OVERFLOW, [5] TX_PREP, [6] TX_DONE |
+| `0x4A` | `IRQ_CLEAR` | W | `0x00` | IRQ Controller | Write 1 to clear corresponding `IRQ_STATUS` bit |
+| `0x4B` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] PACKET_ACTIVE; [3:1] PACKET_PHASE; [4] LIVE_FFT_READY; [5] W_PENDING; [6] W_VALID; [7] W_MISSED_PACKET |
+| `0x4C` | `W_CTRL` | R/W | `0x00` | Packet Control FSM / Combiner | [0] W_COMMIT write-1 pulse; [1] W_VALID read-only; [2] W_PENDING read-only; [3] W_MISSED_PACKET read-only; [7:4] reserved |
+| `0x4D` | `ACTIVE_ANTENNA_EN` | R | `0x0F` | Packet Control FSM | Latched active antenna mask for current packet |
 | **Energy Detector** (`0x50`–`0x57`) | | | | | |
 | `0x50` | `ENERGY_0_HI` | R | `0x00` | Energy Detector | Σ\|x\|² antenna 0 [15:8]; snapshot at correlator lock |
 | `0x51` | `ENERGY_0_LO` | R | `0x00` | Energy Detector | Σ\|x\|² antenna 0 [7:0] |
@@ -139,15 +148,18 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0xAE` | `W_13_IM_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[1,3] imag [15:8] |
 | `0xAF` | `W_13_IM_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
 | **Noise Variance N₀** (`0xB0`–`0xB7`) | | | | | |
-| `0xB0` | `N0_0_HI` | R | `0x00` | Correlator Bank | Noise variance N₀ antenna 0 [15:8], int16; snapshot at correlator lock |
-| `0xB1` | `N0_0_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| `0xB2` | `N0_1_HI` | R | `0x00` | Correlator Bank | N₀ antenna 1 [15:8] |
-| `0xB3` | `N0_1_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| `0xB4` | `N0_2_HI` | R | `0x00` | Correlator Bank | N₀ antenna 2 [15:8] |
-| `0xB5` | `N0_2_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| `0xB6` | `N0_3_HI` | R | `0x00` | Correlator Bank | N₀ antenna 3 [15:8] |
-| `0xB7` | `N0_3_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| **FFT Diagnostics** (`0xC0`–`0xC8`) | | | | | |
+| `0xB0` | `N0_0_HI` | R | `0x00` | FFT Engine | Noise variance N₀ antenna 0 [15:8], int16 |
+| `0xB1` | `N0_0_LO` | R | `0x00` | FFT Engine | [7:0] |
+| `0xB2` | `N0_1_HI` | R | `0x00` | FFT Engine | N₀ antenna 1 [15:8] |
+| `0xB3` | `N0_1_LO` | R | `0x00` | FFT Engine | [7:0] |
+| `0xB4` | `N0_2_HI` | R | `0x00` | FFT Engine | N₀ antenna 2 [15:8] |
+| `0xB5` | `N0_2_LO` | R | `0x00` | FFT Engine | [7:0] |
+| `0xB6` | `N0_3_HI` | R | `0x00` | FFT Engine | N₀ antenna 3 [15:8] |
+| `0xB7` | `N0_3_LO` | R | `0x00` | FFT Engine | [7:0] |
+| `0xB8` | `EPS_SUB_HI` | R | `0x00` | FFT Engine | Fractional CFO estimate `eps_sub` [15:8], signed Q1.15 bins |
+| `0xB9` | `EPS_SUB_LO` | R | `0x00` | FFT Engine | `eps_sub` [7:0] |
+| `0xBA`–`0xBF` | — | — | — | — | Reserved |
+| **FFT Diagnostics** (`0xC0`–`0xC9`) | | | | | |
 | `0xC0` | `FFT_PEAK_BIN_A_HI` | R | `0x00` | FFT Engine | Node 1 (+Δf) peak bin [15:8]; range 0–(2^SF−1) |
 | `0xC1` | `FFT_PEAK_BIN_A_LO` | R | `0x00` | FFT Engine | Node 1 peak bin [7:0] |
 | `0xC2` | `FFT_PEAK_BIN_B_HI` | R | `0x00` | FFT Engine | Node 2 (−Δf) peak bin [15:8] (NT=2 only; 0 in NT=1) |
@@ -158,7 +170,6 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0xC7` | `FFT_PEAK_MAG_B_LO` | R | `0x00` | FFT Engine | Node 2 peak magnitude² [7:0] |
 | `0xC8` | `FFT_NOISE_HI` | R | `0x00` | FFT Engine | Average off-peak noise magnitude [15:8] |
 | `0xC9` | `FFT_NOISE_LO` | R | `0x00` | FFT Engine | Average off-peak noise magnitude [7:0] |
-| `0xB8`–`0xBF` | — | — | — | — | Reserved |
 | **SX1257 Pass-Through** (`0xCA`–`0xCD`) | | | | | |
 | `0xCA` | `SX_TARGET` | R/W | `0x00` | SPI Master | [3:0] chip-select bitmask: bit 0=SX1257_1 … bit 3=SX1257_4; set multiple bits to broadcast a write (RDATA undefined for broadcast) |
 | `0xCB` | `SX_ADDR` | R/W | `0x00` | SPI Master | [6:0] target SX1257 register address |
@@ -221,6 +232,10 @@ In auto mode the `ACTIVE_MODE` register (0x40) reports which mode is active for 
 
 **MODE=2 (passthrough):** Stages 3–7 (energy detector, correlator bank, FFT engine, weight computation, ALMMSE/MRC combiner) are bypassed entirely. The lowest-numbered antenna with its `ANTENNA_EN` bit set is selected; its int8 decimated I+Q samples are sign-extended to int16 and routed directly to REMOD_A. REMOD_B is held at zero (midscale input). PicoRV32 firmware is not involved and the W matrix registers are ignored. Use this mode to obtain a single-antenna baseline for SNR/BER comparison against MRC and ALMMSE combining gain.
 
+In MODE=0/1, before current-packet W has been committed, the live combiner also falls back to this bypass antenna. PicoRV32 writes W into shadow registers and commits it atomically; the combiner only reads the active W bank.
+
+Writes to `MODE` and `ANTENNA_EN` update shadow configuration while a packet is active. Hardware latches `ACTIVE_MODE` and `ACTIVE_ANTENNA_EN` only when the receiver is idle between packets. This prevents antenna/mode glitches in the live remodulated stream.
+
 ---
 
 ### `0x11` — SF_CFG (read/write)
@@ -238,15 +253,29 @@ The FFT engine uses `M = 2^(sf+5)` points. Changing `sf` takes effect from the n
 
 ### `0x12` — CAPTURE_CTRL (read/write)
 
-Controls the Baseband SRAM sample capture trigger.
+Controls the Baseband SRAM sample capture trigger and guarded handoff.
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [0] | `CAPTURE_EN` | Write 1 to arm capture; hardware clears to 0 when capture completes |
+| [0] | `CAPTURE_EN` | Write 1 to arm capture; hardware clears to 0 when the guarded capture window is frozen |
 | [1] | `CAPTURE_MODE` | 0 = raw time-domain samples from all 4 decimators; 1 = FFT output Z_j[k] all bins all antennas |
 | [7:2] | — | Reserved, write 0 |
 
-Capture fills Baseband SRAM from 0x08000 to 0x5FFFF (352 KB). In mode 0 this holds ~11 full SF12 preamble symbols across all 4 antennas at 2 bytes/sample. Read back via SPI burst from 0x08000.
+Capture uses the Baseband SRAM sample-capture region from `0x40000` to `0x87FFF` (288 KB). In mode 0 this holds exactly 9 full SF12 symbols across all 4 antennas at 2 bytes/sample:
+
+```
+9 * 4096 * 4 * 2 bytes = 288 KB
+```
+
+Normal preamble acquisition freezes a guarded capture window:
+
+```
+capture_start = timing_ref - M/2
+capture_len   = 9M samples per antenna
+fft_start     = timing_ref
+```
+
+The FFT engine consumes the 8-symbol RCTSL window starting at `timing_ref` as soon as that live window is resident. The extra 0.5M pre/post guard absorbs Schmidl-Cox timing uncertainty and supports timing diagnostics, but it must not block the live FFT trigger. Read back via SPI burst from `0x40000`.
 
 ---
 
@@ -254,7 +283,7 @@ Capture fills Baseband SRAM from 0x08000 to 0x5FFFF (352 KB). In mode 0 this hol
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [0] | `CAPTURE_DONE` | 1 = capture buffer full and ready to read |
+| [0] | `CAPTURE_DONE` | 1 = guarded capture window frozen and ready to read; same handoff condition as internal `capture_window_ready` |
 | [1] | `CAPTURE_OVERFLOW` | 1 = capture buffer wrapped before host read; data may be stale |
 | [7:2] | — | Reserved |
 
@@ -300,9 +329,59 @@ In NT=1 mode only `CORR_MAG[0..3]` are valid. int16, unsigned.
 
 ---
 
+### `0x49` — IRQ_STATUS (read-only)
+
+Sticky interrupt source bits. The external/internal IRQ line is asserted while any enabled source is set.
+
+| Bit | Field | Meaning |
+| --- | --- | --- |
+| [0] | `CORR_LOCK` | Schmidl-Cox detected preamble; Packet Control FSM entered `PREAMBLE_DETECTED` |
+| [1] | `H_READY` | FFT Engine has written H/N₀/eps_sub; PicoRV32 should compute W |
+| [2] | `W_MISSED_PACKET` | W was not committed before safe switch; current packet remains bypass |
+| [3] | `CAPTURE_DONE` | Diagnostic capture window complete |
+| [4] | `CAPTURE_OVERFLOW` | Capture window was overwritten or second packet arrived while protected |
+| [5] | `TX_PREP` | Host requested TX preparation |
+| [6] | `TX_DONE` | Host indicated TX complete |
+| [7] | — | Reserved |
+
+### `0x4A` — IRQ_CLEAR (write-only)
+
+Write 1s to clear corresponding `IRQ_STATUS` bits. Writing 0 leaves a bit unchanged.
+
+### `0x4B` — PACKET_STATUS (read-only)
+
+Packet Control FSM status.
+
+| Bits | Field | Description |
+| --- | --- | --- |
+| [0] | `PACKET_ACTIVE` | Packet FSM is not idle |
+| [3:1] | `PACKET_PHASE` | 0=IDLE, 1=PREAMBLE_DETECTED, 2=FFT_WAIT, 3=W_COMMIT_WINDOW, 4=PAYLOAD_ACTIVE, 5=PACKET_DONE |
+| [4] | `LIVE_FFT_READY` | 8-symbol live RCTSL window is resident |
+| [5] | `W_PENDING` | `H_READY` has occurred and W commit is pending |
+| [6] | `W_VALID` | `W_ACTIVE` is valid for the current packet |
+| [7] | `W_MISSED_PACKET` | W missed the current packet safe-switch point |
+
+### `0x4C` — W_CTRL (read/write)
+
+Firmware writes W coefficients into the `0x90`–`0xAF` shadow register bank, then writes `W_CTRL[0]=1` to request an atomic commit.
+
+| Bits | Field | Description |
+| --- | --- | --- |
+| [0] | `W_COMMIT` | Write 1 pulse after all W shadow registers are written; hardware commits when the receiver next becomes idle |
+| [1] | `W_VALID` | Read-only mirror of active W valid state |
+| [2] | `W_PENDING` | Read-only; W commit requested but not yet activated |
+| [3] | `W_MISSED_PACKET` | Read-only; W arrived too late for current packet |
+| [7:4] | — | Reserved |
+
+### `0x4D` — ACTIVE_ANTENNA_EN (read-only)
+
+Latched antenna-enable mask used by the live packet. Host writes to `MIMO_CTRL.ANTENNA_EN` update shadow configuration during an active packet; this register shows the no-glitch active copy.
+
+---
+
 ### `0x70`–`0x8F` — H matrix (read-only)
 
-Channel matrix H estimated from the preamble correlator outputs. Written by PicoRV32 firmware after normalising the int32 correlator accumulators to Q1.15 int16.
+Channel matrix H estimated by the FFT Engine after live RCTSL/peak/channel-estimation passes. `IRQ_STATUS.H_READY` indicates these registers and N₀/eps_sub are valid for firmware.
 
 Layout: H[NR_index, NT_index]. For NT=1 only columns 0 (H[0..3, 0]) are valid; for NT=2 both columns populated.
 
@@ -310,9 +389,9 @@ Layout: H[NR_index, NT_index]. For NT=1 only columns 0 (H[0..3, 0]) are valid; f
 
 ### `0x90`–`0xAF` — W matrix (read/write)
 
-Combining weight matrix W computed by PicoRV32 from H and N₀. Written by firmware; read by host for diagnostics or manual override.
+Combining weight matrix W computed by PicoRV32 from H and N₀. These addresses are the firmware-visible `W_SHADOW` bank. The live combiner reads only `W_ACTIVE`, which updates atomically after firmware writes `W_CTRL.W_COMMIT` and the Packet Control FSM reaches an idle boundary. Host reads return the shadow bank for diagnostics/manual override.
 
-Layout: W[NT_index, NR_index]. Combiner hardware reads these registers each sample period to compute `ŷ[n] = W·x[n]`.
+Layout: W[NT_index, NR_index]. Firmware writes all W shadow words, then pulses `W_CTRL.W_COMMIT`. Hardware copies the complete shadow bank into the active bank at the next idle boundary; the combiner uses `W_ACTIVE` each sample period to compute `ŷ[n] = W·x[n]`.
 
 For MRC: `W = H^H` (conjugate transpose, normalised).
 For ALMMSE: `W = H^H · (H·H^H + σ²·I)^{-1}` computed in firmware using RV32IM MUL.
@@ -321,7 +400,11 @@ For ALMMSE: `W = H^H · (H·H^H + σ²·I)^{-1}` computed in firmware using RV32
 
 ### `0xB0`–`0xB7` — N₀[0..3] (read-only)
 
-Per-antenna noise variance estimates, computed by the correlator bank from samples outside the preamble window. int16, unsigned. Used by PicoRV32 firmware to set the regularisation term σ² in the ALMMSE weight computation.
+Per-antenna noise variance estimates, computed by the FFT Engine from off-peak bins after preamble acquisition. int16, unsigned. Used by PicoRV32 firmware to set the regularisation term σ² in the ALMMSE weight computation.
+
+### `0xB8`–`0xB9` — EPS_SUB (read-only)
+
+Fractional CFO estimate from the Stage 4 RCTSL pass. Signed Q1.15 in FFT-bin units, valid when `IRQ_STATUS.H_READY=1`. Firmware may read it for diagnostics, drift tracking, or payload correction policy.
 
 ---
 
@@ -379,7 +462,8 @@ Broadcast (all 4 chips, `SX_TARGET=0x0F`) is valid for register writes that appl
 | `0x70`–`0x8F` | H matrix |
 | `0x90`–`0xAF` | W matrix |
 | `0xB0`–`0xB7` | Noise variance N₀ |
-| `0xB8`–`0xBF` | Reserved |
+| `0xB8`–`0xB9` | Fractional CFO `eps_sub` |
+| `0xBA`–`0xBF` | Reserved |
 | `0xC0`–`0xC9` | FFT diagnostics |
 | `0xCA`–`0xCD` | SX1257 pass-through |
 | `0xCE`–`0xFF` | Reserved |

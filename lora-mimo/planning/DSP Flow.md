@@ -18,8 +18,9 @@ Three operating modes share the same hardware:
 | --- | --- | --- | --- | --- | --- |
 | 1 | SX1257 ΣΔ ADC (×4) | RF signal at each antenna | 1-bit I + 1-bit Q × 4 | 32 MS/s | All |
 | 2 | ΣΔ Decimator — CIC + FIR (×4) | 1-bit I+Q × 4 | int8 complex I+Q × 4 | **125 k – 1 MS/s** | All |
-| 3 | Schmidl-Cox Preamble Detector | int8 I+Q × 4 | sc_lock, timing_ref, eps_sub | Per 2 sym | Mode 1 & 2 |
-| 4 | FFT Engine — Preamble Acq. (2-pass, iterative radix-2, SF5–SF12) | int8 I+Q × 4 from SRAM | H matrix (4×NT), N₀ | Per packet | Mode 1 & 2 |
+| 3 | Schmidl-Cox Preamble Detector | int8 I+Q × 4 | sc_lock, timing_ref | Per 2 sym | Mode 1 & 2 |
+| 3.5 | Packet Control FSM | sc_lock, timing_ref, sample_count | live_fft_ready, safe_switch, active mode/antenna | Per packet | Mode 1 & 2 |
+| 4 | FFT Engine — Preamble Acq. (3-pass, RCTSL + Channel Est.) | int8 I+Q × 4 from SRAM | H matrix (4×NT), N₀, eps_sub | Per packet | Mode 1 & 2 |
 | 5 | Weight Computation (PicoRV32 firmware) | H (4×2), N₀ (4×1) | W matrix (2×4 int16 Q1.15) | Per packet | Mode 1 & 2 |
 | 6 | ALMMSE/MRC Combiner | W (2×4 int16), x[n] (4×1 int8) | ŷ[n] (2×1 int16) per sample | $f_s$ | Mode 1 & 2 |
 | 6' | Bypass MUX | int8 I+Q from selected antenna | int16 I+Q (sign-extended) | $f_s$ | Mode 3 only |
@@ -66,7 +67,7 @@ A 32-tap FIR compensation filter corrects the sinc frequency droop. The entire d
 
 ## Stage 3 — Schmidl-Cox Preamble Detector
 
-Sliding-window autocorrelation across adjacent dechirped symbols. Detects the LoRa preamble without requiring prior knowledge of timing offset or CFO — both shift the dechirped tone to the same bin in consecutive symbols, so their ratio cancels.
+Sliding-window autocorrelation across adjacent dechirped symbols. Detects the LoRa preamble and provides coarse timing.
 
 ```
 SC_j[s] = dot( dechirp(rx_j, s) ,  dechirp(rx_j, s+1)* )
@@ -81,43 +82,86 @@ SC_j[s] = dot( dechirp(rx_j, s) ,  dechirp(rx_j, s+1)* )
 
 **Outputs:**
 - `sc_lock` — asserted when Λ exceeds threshold for two consecutive symbol pairs
-- `timing_ref` — sample counter value at lock, used to align FFT capture windows
-- `eps_sub` — sub-bin fractional CFO offset, extracted from `∠SC / −2π`; range ±0.5 bin
+- `timing_ref` — estimated preamble-start sample index in `iq_valid` units, used to align FFT capture windows
 
-The magnitude ratio Λ is CFO-immune and timing-offset-immune; only a non-chirp (data or noise) symbol breaks the autocorrelation. This matches the approach in **rpp0/gr-lora** (`detect_preamble_autocorr()`, `decoder_impl.cc:340`), which uses SC for detection only — the actual integer CFO bin `k_peak` is found by the downstream FFT.
+`sc_lock` is not the FFT compute trigger. Since a two-hit Schmidl-Cox detector asserts only after observing about three symbols from the candidate preamble start, `timing_ref` is back-calculated to the estimated preamble origin. The Packet Control FSM then waits only until the live 8-symbol RCTSL window is resident:
 
-The SC phase gives `ε_sub` for free with no extra FFT pass. Stage 4 Pass 1 only needs to find the integer bin `k_peak`; it uses `ε_sub` from Stage 3 directly for the per-symbol phase correction in Pass 2.
+```
+fft_start      = timing_ref
+live_fft_ready = sample_count reached timing_ref + 8M - 1
+```
+
+Diagnostic capture may additionally keep pre/post guard samples around the live window:
+
+```
+capture_start = timing_ref - M/2
+capture_len   = 9M samples per antenna
+```
+
+At SF12 and NR=4 this diagnostic/protected capture requires `9 × 4096 × 4 × 2 bytes = 288 KB` of sample capture SRAM: 0.5 symbol pre-guard, 8 preamble symbols, and 0.5 symbol post-guard. The post-guard must not delay `live_fft_ready`; it is for analysis/protection, not a live FFT dependency.
+
+The SC phase is no longer the primary source for fractional CFO (`eps_sub`). Instead, the system uses the more robust RCTSL algorithm in Stage 4. SC is now dedicated to high-sensitivity lock detection and timing recovery.
 
 Exposed in status register `SC_STAT` (see [Register Map](Register%20Map.md)).
 
 ---
 
-## Stage 4 — FFT Engine — Preamble Acquisition (2-pass)
+## Stage 3.5 — Packet Control FSM
 
-Triggered by `sc_lock`. Two passes extract timing, CFO, and the full channel matrix.
+Owns packet phase and safe handoff between the historical capture/FFT path and the live combiner/remod path. It latches `timing_ref`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` at packet start, asserts `live_fft_ready` when the 8-symbol RCTSL window is resident, and permits W/mode/antenna switching only at `safe_switch` boundaries.
 
-**Pass 1 — Coarse (2 symbols, ~16 µs at SF7 / 125 kHz):**
-
-```
-D_j[k] = FFT( dechirp(rx_j, s) )   for s = {0, 1}
-k_peak  = argmax Σ_j Σ_s |D_j[k]|   (incoherent)
-```
-
-Finds the integer bin `k_peak ∈ {0 … M−1}` — the coarse CFO bin that SC cannot provide. `ε_sub` is taken directly from Stage 3 (no redundant computation needed).
-
-**Pass 2 — Coherent (8 symbols, aligned to k_peak bin):**
-
-Each symbol accumulates an inter-symbol phase of `2π·ε_sub` from the sub-bin offset. Without correction, symbols partially cancel. The fix rotates symbol `s` by the accumulated phase before summing:
+Key outputs:
 
 ```
-h_hat_j = (1 / (N_sym · M)) · Σ_s  D_j[s][k_peak] · exp(+j·2π·ε_sub·s)
+live_fft_ready  = sample_count reached timing_ref + 8M - 1
+safe_switch     = packet idle boundary
+combiner_source = BYPASS until W_ACTIVE is valid for this packet
 ```
 
-`ε_sub` comes from Stage 3 — no recomputation needed. SFD downchirp used to confirm sample-accurate timing before h_hat is committed.
+If W computation misses the safe switch point, the current packet remains in bypass and `W_MISSED_PACKET` is set. The FSM must not backpressure `iq_valid`; capture overflow or late W are status events, not live-stream stalls.
+
+With no mid-packet switching, `safe_switch` means the receiver is idle between packets. If `W_COMMIT` arrives while a packet is active, the current packet stays in bypass and the committed W is deferred to the next idle boundary.
+
+See [Packet Control FSM](blocks/Packet%20Control%20FSM.md).
+
+---
+
+## Stage 4 — FFT Engine — Preamble Acquisition (3-pass)
+
+Triggered after `sc_lock` plus live 8-symbol capture readiness. Three passes extract fine CFO, integer timing/bin, and the full channel matrix using the RCTSL (Recursive Continuous Time Signal Likelihood) algorithm for sub-bin precision. Diagnostic guard capture must not block this live trigger.
+
+**Pass 1 — Fine CFO via RCTSL (~8 symbols):**
+
+Concatenates $N_{sym}$ dechirped preamble symbols starting at `timing_ref` and performs an **unpadded live FFT** on the $N_{sym} \cdot M$ concatenated samples. An incoherent magnitude-squared sum is taken across all antennas to produce a high-resolution spectrum $P[k]$. A 2× zero-padded mode may be retained for SF7/SF8 validation or diagnostics, but it is not required in the live acquisition path.
+
+```
+eps_sub = RCTSL_Correction(argmax P[k])
+```
+
+RCTSL quadratic correction (Cui Yang et al.) provides sub-bin accuracy without requiring zero padding. The live SF12 RCTSL transform is $8 \text{ symbols} \times 4096 \text{ samples} = 32768$ complex points, requiring 128 KB of int16-complex staging. Optional 2× padded diagnostics require 256 KB.
+
+**Pass 2 — Coarse Integer Bin:**
+
+Standard length-$M$ FFT on dechirped samples (corrected by `eps_sub` in the time domain). 
+
+```
+k_peak  = argmax Σ_j Σ_s |FFT(rx_corr_j, s)|
+```
+
+Finds the integer bin `k_peak ∈ {0 … M−1}`.
+
+**Pass 3 — Coherent Channel Estimation:**
+
+Coherent average of $D_j[s][k\_peak]$ across $N_{sym}$ symbols per antenna. Since `eps_sub` was removed in the time domain before Pass 2, no inter-symbol phase rotation is needed in the accumulator.
+
+```
+h_hat_j = (1 / (N_sym · M)) · Σ_s  D_j[s][k_peak]
+```
 
 **Outputs:**
 - `H` — 4×NT complex channel matrix (h_hat per antenna/node)
 - `N₀` — per-antenna noise variance from off-peak bins
+- `eps_sub` — final fractional CFO estimate
 - `h_ready` — asserted when H is valid; triggers Stage 5 weight computation
 
 ---
@@ -125,6 +169,17 @@ h_hat_j = (1 / (N_sym · M)) · Σ_s  D_j[s][k_peak] · exp(+j·2π·ε_sub·s)
 ## Stage 5 — Weight Computation
 
 Runs on PicoRV32 (RV32IM) after `h_ready` from Stage 4. Unaffected by decimation ratio change.
+
+Firmware reads H/N0/eps_sub, computes W, writes the `W_SHADOW` register bank, then pulses `W_CTRL.W_COMMIT`. The Packet Control FSM copies `W_SHADOW` into `W_ACTIVE` only when the receiver becomes idle. If the commit arrives while a packet is active, `W_MISSED_PACKET` is set for that packet and the live path stays in bypass.
+
+The timing budget is therefore bounded by packet phase, not by capture guard length:
+
+```
+available_cycles = (safe_switch_sample - h_ready_sample) * (32 MHz / f_s)
+required_cycles  = FFT tail/writeback + PicoRV32 W calculation + W_SHADOW writes
+```
+
+The implementation goal is for `h_ready -> W_COMMIT` to complete before the current packet ends. The fail-safe behavior is bypass for the current packet, never a mid-packet W update.
 
 > **Known limitation — MRC degradation at low SNR.**
 > MRC combining quality is bounded by channel estimation quality. At low SNR (observed in simulation at −5 dB per-antenna SNR with SF7), 8-symbol FFT averaging produces a noisy `H` estimate. Imperfect phase corrections can cause antenna streams to add partially destructively, making estimated MRC *worse* than the best single antenna. Ideal MRC (using true H) always equals or exceeds the best single antenna — the gap is the estimation loss.
@@ -139,6 +194,20 @@ Time-domain combining performed at the decimated rate $f_s$.
 
 **NT=1 (MRC):** `y[n] = w^H · x[n]`
 **NT=2 (ALMMSE):** `ŷ[n] = W · x[n]`
+
+Capture and FFT run in parallel with the live stream. Before current-packet W is valid, the combiner falls back to the selected bypass antenna rather than outputting zeros:
+
+```
+if !W_valid:
+    y[0] = sign_extend_8to16(x[bypass_sel][n])
+    y[1] = 0
+else:
+    y = combine(W_ACTIVE, x[n])
+```
+
+PicoRV32 writes W into a shadow register bank and commits it atomically to `W_ACTIVE` after all words are written. The live MACs never read partially-written W.
+
+`W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` switch only when the receiver is idle between packets. If W is not ready, or a packet is still active, the current packet stays in bypass and the commit is deferred.
 
 ---
 
@@ -186,5 +255,5 @@ Running at lower bandwidths (e.g., 125 kHz) increases frequency resolution by **
 | Programmable Decimation | 32× to 256× | Native support for 125, 250, 500, 1000 kHz BW |
 | SC detection window | 2M samples (2 symbols) | Schmidl-Cox threshold Λ ≥ 0.90; CFO-immune |
 | Preamble coherent avg | 8 symbols | Optimal sensitivity (4.5 dB gain vs 1-symbol) |
-| FFT SRAM (SF12) | 32 KB | Covers full symbol at any BW due to $f_s = BW$ |
+| FFT SRAM (SF12 RCTSL) | 128 KB live / 256 KB optional | Live path supports 32,768-pt unpadded RCTSL; optional 65,536-pt padded diagnostics |
 | ΣΔ re-mod order | 3rd order | High stability and SQNR across all OSRs (32–256) |

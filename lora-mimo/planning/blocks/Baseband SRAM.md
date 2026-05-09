@@ -1,4 +1,4 @@
-# Baseband SRAM (384 KB)
+# Baseband SRAM (544 KB)
 
 Memory block. See [System Architecture](../System%20Diagram.md) for context.
 
@@ -9,7 +9,7 @@ Memory block. See [System Architecture](../System%20Diagram.md) for context.
 
 ## Function
 
-384 KB single-port OpenRAM macro on GF180MCU. Shared between the FFT engine and PicoRV32 firmware via a priority arbiter. Two logical regions with non-overlapping address ranges.
+544 KB single-port OpenRAM macro on GF180MCU. Shared between the FFT engine and PicoRV32 firmware via a priority arbiter. Two logical regions with non-overlapping address ranges.
 
 ---
 
@@ -17,11 +17,22 @@ Memory block. See [System Architecture](../System%20Diagram.md) for context.
 
 | Region | Address range | Size | Owner | Contents |
 | --- | --- | --- | --- | --- |
-| FFT working buffer | `0x00000`–`0x07FDF` | 32 KB | FFT engine | int16 complex working buffer; one antenna at a time; overwritten each run |
-| FFT H output | `0x07FE0`–`0x07FFF` | 32 B | FFT engine | Z_j[k_A/B] for all antennas × 2 nodes; written during PEAK; firmware reads for H estimation |
-| Sample capture | `0x08000`–`0x5FFFF` | 352 KB | Capture controller / host | Raw int8 I+Q from decimators; also FFT input source; paused during FFT |
+| FFT staging buffer | `0x00000`–`0x3FFFF` | 256 KB reserved | FFT engine | int16 complex working buffer; live SF12 RCTSL uses 128 KB, optional 2× padded diagnostic mode uses the full 256 KB |
+| Sample capture | `0x40000`–`0x87FFF` | 288 KB | Capture controller / host | Raw int8 I+Q from decimators; circular guarded preamble window and FFT input source |
 
-Total: 0x60000 = 393,216 bytes = 384 KB.
+Total: 0x88000 = 557,056 bytes = 544 KB.
+
+The 288 KB capture region holds exactly `9M` SF12 samples across all four antennas:
+
+```
+9 * 4096 samples * 4 antennas * 2 bytes/int8-complex = 294,912 bytes = 288 KB
+```
+
+This implements the timing-handoff guard:
+
+```
+0.5M pre-guard + 8M preamble + 0.5M post-guard
+```
 
 ---
 
@@ -29,7 +40,7 @@ Total: 0x60000 = 393,216 bytes = 384 KB.
 
 | Port | Direction | Width | Description |
 | --- | --- | --- | --- |
-| `addr` | in | 19 | Byte address (0x00000–0x5FFFF) |
+| `addr` | in | 20 | Byte address (0x00000–0x87FFF) |
 | `wdata` | in | 32 | Write data (32-bit word) |
 | `rdata` | out | 32 | Read data |
 | `we` | in | 1 | Write enable |
@@ -51,7 +62,21 @@ if req[0]:   grant[0] = 1, grant[1] = 0   // FFT wins
 else:        grant[0] = 0, grant[1] = 1   // PicoRV32 wins
 ```
 
-**Capture/FFT region separation.** FFT working buffer (`0x00000`–`0x03FFF`) and capture region (`0x04000`–`0x5FFFF`) are distinct address ranges. The FFT reads from capture and writes to working buffer — no address conflict. The capture controller freezes its write pointer while `fft_active` is high (asserted by FFT engine).
+**Capture/FFT region separation.** FFT staging buffer (`0x00000`–`0x3FFFF`) and capture region (`0x40000`–`0x87FFF`) are distinct address ranges. The FFT reads from capture and writes to staging buffer — no address conflict. Only the lower 128 KB of staging is required for the live unpadded SF12 RCTSL path; the upper 128 KB is reserved for optional 2× padded diagnostics/refinement.
+
+**Capture handoff.** The capture controller continuously writes decimator output into the capture region as a circular buffer. Schmidl-Cox provides `timing_ref`, the estimated preamble-start sample index in `iq_valid` units. The controller then freezes a guarded window only after all required samples are present:
+
+```
+capture_start = timing_ref - M/2
+capture_len   = 9*M samples per antenna
+fft_start     = timing_ref
+```
+
+The live FFT trigger is generated when the 8-symbol RCTSL window from `timing_ref` through `timing_ref + 8M - 1` is resident, not directly by `sc_lock` and not after waiting for diagnostic post-guard. `fft_active` prevents the protected live window from being overwritten until the FFT has copied or consumed the needed samples.
+
+The capture/FFT path must not stall the live decimator-to-combiner-to-remod stream. If capture storage is busy or a second packet would overwrite a protected window, set `CAPTURE_OVERFLOW` or `capture_busy`; do not backpressure `iq_valid`.
+
+`timing_ref` and capture-window arithmetic use the free-running `iq_valid` sample counter modulo 2³². Address generation maps sample index differences into the 288 KB circular capture region; the pre-guard is valid only after the capture buffer has been running for at least `M/2` samples, which is already true in normal continuous RX operation.
 
 ---
 
@@ -61,13 +86,10 @@ Generate using the GF180MCU OpenRAM PDK configuration:
 
 ```
 word_size  = 32          # bits
-num_words  = 98304       # 384 KB / 4 bytes = 96K words... 
-                         # SRAM compiler may require power-of-2 sizes
-                         # Round up to 131072 (512 KB) if needed,
-                         # or split into two 192 KB macros
+num_words  = 139264      # 544 KB / 4 bytes = 136K words
 ```
 
-**Action required before floorplan:** Run the GF180MCU OpenRAM compiler to get actual area, timing, and power numbers. Estimated area ~3.15 mm² for 384 KB — verify before committing to floorplan. If a single 384 KB macro is not available, split into 2× 192 KB macros with address decode logic.
+**Action required before floorplan:** Run the GF180MCU OpenRAM compiler to get actual area, timing, and power numbers. Estimated area scales from ~4.2 mm² for 512 KB to ~4.5 mm² for 544 KB — verify before committing to floorplan. If a single 544 KB macro is not available, split into 256 KB FFT staging + 288 KB capture macros with address decode logic. If optional padded diagnostics are dropped, the live FFT staging requirement falls to 128 KB and the memory map can be reduced.
 
 ---
 
@@ -77,14 +99,16 @@ num_words  = 98304       # 384 KB / 4 bytes = 96K words...
 | --- | --- | --- |
 | Write + read back | cocotb: write known pattern, read back | Byte-identical |
 | Arbiter priority | FFT + PicoRV32 simultaneous | FFT gets grant; PicoRV32 stalls then gets access |
-| Full address range | Sweep all 96K words | No stuck bits |
-| Capture region isolation | Write capture data; run FFT | FFT staging (0x00000–0x07FFF) unaffected |
+| Full address range | Sweep all 136K words | No stuck bits |
+| Capture region isolation | Write capture data; run FFT | FFT staging (0x00000–0x3FFFF) unaffected |
+| Guarded capture window | Inject preamble with random offset | Frozen window contains `timing_ref-M/2` through `timing_ref+8.5M-1` |
 
 ---
 
 ## Related blocks
 
 - [FFT Engine](FFT%20Engine.md) — primary user of FFT staging region
+- [Packet Control FSM](Packet%20Control%20FSM.md) — asserts capture protection and live FFT readiness
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — firmware access + capture region
 - [SPI Slave](SPI%20Slave.md) — host burst-reads capture region via SPI
 - [System Architecture](../System%20Diagram.md) — area estimate; OpenRAM action item

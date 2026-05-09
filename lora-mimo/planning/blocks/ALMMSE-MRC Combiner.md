@@ -28,7 +28,7 @@ y[1][n] = 0                               // REMOD_B idle
 ```
 `bypass_sel` is the index of the lowest-numbered antenna with its `ANTENNA_EN` bit set, decoded from the `bypass_ant` input.
 
-W is preloaded by PicoRV32 into the W matrix register bank before the data payload arrives. During combining, the hardware reads W registers each sample and applies them — W is static across a packet. In passthrough mode W registers are not read.
+W is computed by PicoRV32 after `h_ready` from the FFT engine. Until current-packet W is valid, the combiner must not output zeros; it falls back to the selected bypass antenna so the SX1302 continues seeing a valid single-antenna LoRa stream. In passthrough mode W registers are not read.
 
 ---
 
@@ -41,6 +41,7 @@ W is preloaded by PicoRV32 into the W matrix register bank before the data paylo
 | `x_valid` | in | 1 | 1 MS/s | Sample strobe |
 | `W_re[1:0][3:0]` | in | 8×16 signed | static | W matrix real — from W register bank |
 | `W_im[1:0][3:0]` | in | 8×16 signed | static | W matrix imaginary |
+| `W_valid` | in | 1 | static | Current-packet W has been atomically committed to the active W bank |
 | `mode[1:0]` | in | 2 | static | 0 = NT=1 MRC; 1 = NT=2 ALMMSE; 2 = passthrough |
 | `bypass_ant[1:0]` | in | 2 | static | Index (0–3) of antenna to route in passthrough mode; decoded from ANTENNA_EN by control logic |
 | `clk_32m` | in | — | 32 MHz | Master clock |
@@ -72,7 +73,20 @@ In NT=1 mode, only `y[0]` is valid; `y[1]` is zero.
 
 **Accumulator saturation.** Saturate at int16 bounds after truncation — do not allow 2's-complement wrap. This prevents combining failure on ill-conditioned channels where W has large entries.
 
-**W register read timing.** W registers are written by PicoRV32 via the Wishbone bus. The combiner reads them combinatorially each sample. A simple flag from firmware ("W ready") gates the combining output until W is valid.
+**Live output state.** Capture, FFT, and firmware W computation run in parallel with the live decimator-to-remod stream. The combiner output policy is:
+
+```
+NO_W / ACQUIRING:     y[0] = sign_extend(x[bypass_sel]); y[1] = 0
+W_VALID, MODE=0:      y[0] = w^H · x;                   y[1] = 0
+W_VALID, MODE=1:      y    = W · x
+MODE=2 passthrough:   y[0] = sign_extend(x[bypass_sel]); y[1] = 0
+```
+
+This makes the first packet recoverable as a single-antenna packet if W arrives late, and prevents mid-preamble silence from breaking SX1302 detection.
+
+**W register read timing.** W registers must be double-buffered. PicoRV32 writes `W_SHADOW` via Wishbone, then asserts a one-cycle commit strobe after all words are written. Hardware copies `W_SHADOW` to `W_ACTIVE` atomically and sets `W_valid`. The combiner reads only `W_ACTIVE`, so firmware writes cannot glitch live MACs. If W is invalidated mid-packet, keep using the last committed `W_ACTIVE` until firmware explicitly clears `W_valid` or changes mode.
+
+**No-glitch switching.** `W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` must update only when the receiver is idle between packets. Host writes to `MODE` or `ANTENNA_EN` update shadow configuration during an active packet and commit at the next idle boundary. If current-packet W is not ready, stay in bypass for that packet rather than switching mid-symbol or at a payload boundary.
 
 **NT=1 MRC degenerate case.** When only 1 antenna is enabled via `ANTENNA_EN`, W is a 1×1 scalar — trivially computed by firmware. Combiner still works; unused antenna inputs are zero.
 
@@ -88,7 +102,11 @@ In NT=1 mode, only `y[0]` is valid; `y[1]` is zero.
 | NT=1 MRC, degenerate (1 antenna) | Set ANTENNA_EN=0001 | Output = single-antenna SNR |
 | NT=2 ALMMSE, orthogonal channels | Pre-load ALMMSE W; inject 2 nodes | Node separation > 20 dB |
 | NT=2 ALMMSE, ill-conditioned H | κ(H) >> 1 | Output valid, no int16 overflow/wrap |
-| W update mid-packet | Write new W via Wishbone during combining | Old W used until W_ready de-asserted; no glitch |
+| No current W | Start packet with `W_valid=0` | Output follows `bypass_ant`; REMOD_A receives a valid single-antenna stream |
+| W commit | Write W shadow then commit | `W_ACTIVE` changes atomically; no partially-written W appears at output |
+| W update mid-packet | Write new W via Wishbone during combining | Old W used until commit; no glitch |
+| Safe switch | Assert W commit while packet is active | W activation is deferred until the next idle boundary |
+| Mode write mid-packet | Host writes MODE/ANTENNA_EN during active packet | `ACTIVE_MODE`/`ACTIVE_ANTENNA_EN` unchanged until next idle boundary |
 | Passthrough, ant0 selected | MODE=2, ANTENNA_EN=0001, inject sine on ant0, zeros on ant1–3 | y[0] = sign_extend(x_ant0); y[1] = 0; identical to decimator output |
 | Passthrough, ant2 selected | MODE=2, ANTENNA_EN=0100 | y[0] tracks ant2 exactly; ant0/1/3 ignored |
 | Passthrough vs MRC gain | Same signal, compare MODE=0 and MODE=2 output power | MRC output ≈ 6 dB higher (4 equal antennas) |

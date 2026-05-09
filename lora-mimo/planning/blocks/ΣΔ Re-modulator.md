@@ -29,7 +29,7 @@ OSR = 32 (32 MS/s / 1 MS/s). In-band SQNR > 100 dB for a 3rd order modulator at 
 | `in_i` | in | 16 signed | 1 MS/s | I from combiner |
 | `in_q` | in | 16 signed | 1 MS/s | Q from combiner |
 | `in_valid` | in | 1 | 1 MS/s | Sample strobe |
-| `en` | in | 1 | static | 0 = output tristated (re-mod B in NT=1 mode) |
+| `en` | in | 1 | static | 0 = output driven to defined idle level (re-mod B in NT=1 mode) |
 | `clk_32m` | in | — | 32 MHz | Master clock |
 | `rst_n` | in | — | — | Active-low reset |
 | `out_i` | out | 1 | 32 MS/s | 1-bit I bitstream → SX1302 |
