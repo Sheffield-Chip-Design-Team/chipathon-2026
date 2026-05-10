@@ -84,7 +84,7 @@ graph LR
             SPIS["SPI Slave\nRPi SPI0 CS1\nconfig + FW load"]
             SPIM["SPI Master\n→ SX1257 config\n(shared MOSI/MISO/SCK)"]
             SWDTAP["SWD TAP\nPicoRV32 debug"]
-            WB["Wishbone Bus"]
+            WB["AHB-Lite Bus"]
             PICO <--> WB
             WB <--> BSRAM & SPIS & SPIM & SWDTAP
         end
@@ -274,7 +274,7 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 
 ## Clock domain crossing boundaries
 
-The design has a single internal clock domain (32 MHz, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins). All DSP blocks, PicoRV32, Wishbone bus, and SPI master are synchronous to this domain.
+The design has a single internal clock domain (32 MHz, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins). All DSP blocks, PicoRV32, AHB-Lite bus, and SPI master are synchronous to this domain.
 
 > **CFO is a transmitter-only property.** Because all four SX1257 AFEs and the ASIC itself derive their clocks from one TCXO, there is no sampling-rate offset (SRO) between antennas or between the ADC outputs and ASIC processing. Any observed carrier frequency offset `df` is entirely due to the remote transmitter's TCXO offset. The digital CFO correction `exp(−j2π·df_est·n/Fs)` applied in firmware operates with cycle-accurate sample indexing — no accumulated phase error from clock-domain mismatch. The residuals quantified in `sim/notebooks/02_cfo_estimation.ipynb` are therefore the complete error budget.
 
@@ -282,7 +282,7 @@ The following boundaries require explicit CDC treatment:
 
 | Boundary | Async signal(s) | Direction | Required treatment | Documented in |
 | --- | --- | --- | --- | --- |
-| RPi SPI slave | `HOST_CS`, `SPI_SCK`, `SPI_MOSI` | RPi → ASIC | 2-FF synchroniser on `HOST_CS` and `SPI_SCK` edges; or run SPI slave FSM in the SPI clock domain with Wishbone handshake | [SPI Slave](blocks/SPI%20Slave.md) |
+| RPi SPI slave | `HOST_CS`, `SPI_SCK`, `SPI_MOSI` | RPi → ASIC | 2-FF synchroniser on `HOST_CS` and `SPI_SCK` edges; or run SPI slave FSM in the SPI clock domain with AHB-Lite handshake | [SPI Slave](blocks/SPI%20Slave.md) |
 | SWD TAP | `SWDCLK`, `SWDIO` | Probe → ASIC | 2-FF synchroniser on `SWDCLK` into 32 MHz domain; or implement TAP entirely in `SWDCLK` domain with handshake | [SWD TAP](blocks/SWD%20TAP.md) |
 | SX1257 DIO inputs | `DIO0`–`DIO3` from each SX1257 | SX1257 → ASIC | 2-FF synchroniser per pin; see note below | [SPI Master](blocks/SPI%20Master.md) |
 
@@ -304,7 +304,7 @@ The following boundaries require explicit CDC treatment:
 | ALMMSE/MRC Combiner | ~10,000 | |
 | ΣΔ Re-mod ×2 | ~1,400 | |
 | PicoRV32 RV32IM | ~10,000 | |
-| SPI Slave + SPI Master + Wishbone | ~5,000 | |
+| SPI Slave + SPI Master + AHB-Lite | ~5,000 | |
 | Status register bank | ~1,000 | |
 | IRQ + misc | ~800 | |
 | **Logic total** | **~54,200 GE** | **~0.66 mm²** |
@@ -321,16 +321,18 @@ The following boundaries require explicit CDC treatment:
 | Mode | Config | Combining | Output | Notes |
 | --- | --- | --- | --- | --- |
 | 1 | NT=1, NR=4 | MRC | ΣΔ re-mod → SX1302 Radio A | Backward compatible, default |
-| 2 | NT=2, NR=4 | ALMMSE | ΣΔ re-mod ×2 → SX1302 Radio A+B | Auto-switches on ±Δf preamble pair detect |
+| 2 | NT=2, NR=4 | ALMMSE | ΣΔ re-mod ×2 → SX1302 Radio A+B | Extension mode; spatial separation is primary, small `Δf` may assist identification / estimation |
 | 3 | NT=1, NR=1 | Passthrough (bypass) | ΣΔ re-mod → SX1302 Radio A; Radio B idle | Stages 3–7 bypassed; single-antenna baseline for SNR/BER comparison |
 
-Mode auto-switches per frame (auto mode only); returns to Mode 1 on frame end. SX1302 IF channels must be configured to ±Δf for NT=2. Mode 3 (passthrough) is selected by writing `MIMO_CTRL.MODE = 2`; antenna is chosen by the lowest set bit of `ANTENNA_EN`.
+Mode auto-switches per frame (auto mode only); returns to Mode 1 on frame end. If `Δf` assist is used for NT=2, SX1302 IF channels must be configured accordingly. Mode 3 (passthrough) is selected by writing `MIMO_CTRL.MODE = 2`; antenna is chosen by the lowest set bit of `ANTENNA_EN`.
 
-> **NT=2 node coordination requirement.** ALMMSE separation requires both nodes to transmit simultaneously on their respective offset frequencies (f₀+Δf and f₀−Δf). Standard LoRaWAN Class A nodes transmit independently with random backoff and will never intentionally overlap — NT=2 mode cannot activate with unmodified LoRaWAN firmware. A real NT=2 deployment requires custom node firmware or a network scheduler that synchronises two nodes onto symmetric offset frequencies for each uplink. This system is therefore a private MIMO testbed, not a drop-in LoRaWAN upgrade. NT=1 MRC mode operates normally with any standard LoRaWAN node and is unaffected.
+> **NT=2 node coordination requirement.** `NT=2` remains an extension path. The current direction is simultaneous payload transmission with separation driven mainly by spatial processing; a small `Δf` may be used only as an identification or channel-estimation aid. Large symmetric offsets are no longer the preferred assumption because they risk bandwidth occupancy and compatibility problems. Standard LoRaWAN Class A nodes still will not intentionally overlap in the required way, so any real `NT=2` deployment requires custom node firmware or a network scheduler. This remains a private MIMO testbed extension, not a drop-in LoRaWAN upgrade. `NT=1` MRC mode operates normally with any standard LoRaWAN node and is unaffected.
 
 ---
 
 ## Block ownership
+
+See [Work Allocation Summary](Work%20Allocation.md) for a more detailed assignment view with subblocks and responsibilities.
 
 | Block | Owner | Spec |
 | --- | --- | --- |
@@ -344,11 +346,17 @@ Mode auto-switches per frame (auto mode only); returns to Mode 1 on frame end. S
 | PicoRV32 SRAM (16 KB OpenRAM) | TBD | — |
 | SPI Slave (host interface) | TBD | — |
 | SPI Master (→ SX1257) | TBD | — |
-| Wishbone Bus | TBD | — |
+| AHB-Lite Bus | TBD | — |
 | Status Register Bank | TBD | [Register Map](Register%20Map.md) |
 | IRQ Controller | TBD | — |
 | SWD TAP | TBD | — |
-| PicoRV32 firmware | TBD | — |
+| PicoRV32 firmware + algorithms | TBD | [MIMO Algorithms](MIMO%20Algorithms.md) |
 | Physical design & floorplan | TBD | — |
 | Verification (cocotb) | TBD | — |
-| System simulation (Python/GNU Radio) | TBD | — |
+| System simulation and algorithm models (Python/GNU Radio) | TBD | — |
+
+Software and verification deliverables:
+
+- `System simulation and algorithm models` owns the Python-first ladder: behavioral model, algorithm selection, threshold tuning, and fallback policy.
+- `Verification (cocotb)` owns RTL-to-Python comparison, packet-level regression, register behavior, and block/integration testbenches.
+- `PicoRV32 firmware + algorithms` owns the firmware-side control loop, AGC, W computation, and in-the-loop behavior once the RTL model is stable.

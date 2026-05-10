@@ -9,7 +9,9 @@ Control block. See [System Architecture](../System%20Diagram.md) for context.
 
 ## Function
 
-PicoRV32 RV32IM soft-core CPU managing all timing-sensitive and algorithmic tasks that are impractical in RTL. Runs firmware loaded over SPI by the RPi host. Connects to all peripherals via Wishbone bus.
+PicoRV32 RV32IM soft-core CPU managing all timing-sensitive and algorithmic tasks that are impractical in RTL. Runs firmware loaded over SPI by the RPi host. Connects to all peripherals via a custom `AHB-Lite` wrapper/interconnect.
+
+**Bus decision.** The project bus is now `AHB-Lite`. PicoRV32 is kept as the CPU, so the master side is a custom implementation rather than a native Wishbone integration.
 
 **Why RV32IM (not RV32I):** The ALMMSE weight computation requires a 2×2 complex matrix inversion. The closed-form determinant and reciprocal involve 32-bit multiplies — hardware MUL/DIV (the M extension) reduces the weight computation from ~1000 cycles (software multiply) to ~50 cycles.
 
@@ -259,7 +261,7 @@ void drift_compensation() {
 
 ### AGC loop
 
-Triggered at each `IRQ_STATUS.CORR_LOCK`, independent of the later `IRQ_STATUS.H_READY` W-computation path. Reads per-antenna energy latched at preamble lock by the Energy Detector and adjusts each SX1257's `RegRxAnaGain` (0x0C) independently.
+Triggered at each `IRQ_STATUS.CORR_LOCK`, independent of the later `IRQ_STATUS.H_READY` W-computation path. Reads per-antenna energy latched at preamble lock by the Energy Measurement and adjusts each SX1257's `RegRxAnaGain` (0x0C) independently.
 
 **SX1257 RegRxAnaGain (0x0C) layout:**
 
@@ -348,7 +350,7 @@ void agc_update() {
 
 ### FFT-based H estimation (post-silicon fallback)
 
-If correlator H estimation is unreliable on silicon, firmware reads the complex H directly from the FFT H output region in Baseband SRAM (`0x07FE0`–`0x07FFF`, mapped at Wishbone address `0x207FE0`):
+If correlator H estimation is unreliable on silicon, firmware reads the complex H directly from the FFT H output region in Baseband SRAM (`0x07FE0`–`0x07FFF`, mapped at AHB-Lite address `0x207FE0`):
 
 ```c
 // After FFT completes (fft_done IRQ or polling):
@@ -378,12 +380,12 @@ Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORREL
 | --- | --- | --- | --- |
 | `0x00000` | IMEM (instruction) | 32 KB | Loaded by host via SPI; PicoRV32 fetches from here |
 | `0x08000` | DMEM (data/stack) | 32 KB | Separate OpenRAM macro |
-| `0x10000` | Wishbone peripherals | — | Register bank, SPI master, IRQ, SWD |
+| `0x10000` | AHB-Lite peripherals | — | Register bank, SPI master, IRQ, SWD |
 | `0x20000` | Baseband SRAM | 544 KB | Shared with FFT engine via arbiter |
 
 ---
 
-## Interface (Wishbone)
+## Interface (AHB-Lite)
 
 | Peripheral | WB Address | Notes |
 | --- | --- | --- |
@@ -398,7 +400,7 @@ Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORREL
 
 **PicoRV32 IP source.** Use the upstream PicoRV32 repo (Clifford Wolf). Enable `ENABLE_MUL`, `ENABLE_DIV`, `ENABLE_IRQ`. Disable `ENABLE_FAST_MUL` to save gates (iterative MUL is fine for firmware latency budget).
 
-**SRAM arbitration.** PicoRV32 and FFT engine share the Baseband SRAM. A simple priority arbiter grants the bus: FFT has priority during COMPUTE phase; PicoRV32 stalls (Wishbone wait-state) until granted. IMEM and DMEM are separate macros — no contention with FFT.
+**SRAM arbitration.** PicoRV32 and FFT engine share the Baseband SRAM. A simple priority arbiter grants the bus: FFT has priority during COMPUTE phase; PicoRV32 stalls (AHB-Lite wait-state) until granted. IMEM and DMEM are separate macros — no contention with FFT.
 
 **Firmware load flow:**
 ```
@@ -420,14 +422,14 @@ Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORREL
 | MRC weight computation | Pre-load H/N₀; read back W after IRQ | W matches Python `H* / (‖H‖²+N0)` to ±2 LSB |
 | ALMMSE weight computation | Pre-load 4×2 H/N₀; read back W | W matches Python closed-form to ±2 LSB |
 | AGC loop | Static channel; vary SX1257 gain via WB | Gain converges within 3 packets |
-| Wishbone bus | Back-to-back peripheral accesses | No missed ack; correct data |
+| AHB-Lite bus | Back-to-back peripheral accesses | No missed ack; correct data |
 | SRAM arbitration | Run firmware + FFT simultaneously | No data corruption; CPU stalls correctly |
 
 ---
 
 ## Related blocks
 
-- [Wishbone Bus](Wishbone%20Bus.md) — interconnect
+- [AHB-Lite Bus](AHB-Lite%20Bus.md) — interconnect
 - [Baseband SRAM](Baseband%20SRAM.md) — shared memory
 - [SPI Master](SPI%20Master.md) — SX1257 config
 - [IRQ Controller](IRQ%20Controller.md) — `h_ready`, packet, and TX IRQs

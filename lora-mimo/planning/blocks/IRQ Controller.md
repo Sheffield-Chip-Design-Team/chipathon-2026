@@ -9,7 +9,7 @@ Control block. See [System Architecture](../System%20Diagram.md) for context.
 
 ## Function
 
-Collects interrupt sources from DSP blocks and routes them to PicoRV32 (internal) and to the RPi host (external GPIO pad). Provides sticky status/clear bits that are visible through the internal Wishbone interface and mirrored to the SPI-visible `IRQ_STATUS`/`IRQ_CLEAR` registers.
+Collects interrupt sources from DSP blocks and routes them to PicoRV32 (internal) and to the RPi host (external GPIO pad). Provides sticky status/clear bits that are visible through the internal AHB-Lite interface and mirrored to the SPI-visible `IRQ_STATUS`/`IRQ_CLEAR` registers.
 
 ---
 
@@ -38,7 +38,7 @@ Collects interrupt sources from DSP blocks and routes them to PicoRV32 (internal
 | `capture_overflow` | in | 1 | From SRAM capture logic |
 | `irq_out` | out | 1 | Level-high IRQ to PicoRV32 |
 | `IRQ` | out | 1 | GPIO pad to RPi (active high) |
-| `wb_addr` | in | 8 | Wishbone address |
+| `wb_addr` | in | 8 | AHB-Lite address |
 | `wb_rdata` | out | 32 | IRQ status register |
 | `wb_wdata` | in | 32 | IRQ clear (write 1 to clear) |
 | `wb_we` | in | 1 | — |
@@ -49,7 +49,7 @@ Collects interrupt sources from DSP blocks and routes them to PicoRV32 (internal
 
 ---
 
-## Register (Wishbone and SPI mirror, read/clear)
+## Register (AHB-Lite and SPI mirror, read/clear)
 
 | Bit | Source | Clear |
 | --- | --- | --- |

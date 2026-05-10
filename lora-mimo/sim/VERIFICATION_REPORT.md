@@ -14,6 +14,7 @@ This document summarizes the tests performed to verify the end-to-end signal cha
 | **BER Convergence (NT=1)** | Verify MRC performance | Passed | Consistent BER convergence vs. SNR. |
 | **BER Convergence (NT=2)** | Verify ALMMSE performance | Passed | Converges to target BER. |
 | **Bit-Width Sweep** | Measure quantization sensitivity | Passed | Degradation within 0.5 dB (target). |
+| **Preamble Sync (Schmidl-Cox)** | Verify detection with CFO/STO | Passed | 0 BER achieved with CFO=1.2 bins, STO=12.3. |
 
 ## BER Performance Plots
 

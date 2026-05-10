@@ -23,12 +23,14 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x15` | `CAPTURE_PTR_MID` | R | `0x00` | Baseband SRAM | Capture write pointer [15:8] |
 | `0x16` | `CAPTURE_PTR_LO` | R | `0x00` | Baseband SRAM | Capture write pointer [7:0]; frozen while `fft_active` |
 | `0x17` | `TX_CTRL` | R/W | `0x00` | PicoRV32 FW | [0] TX_PREP; [1] TX_DONE; [2] TX_ACTIVE |
-| `0x18` | `ENERGY_THR_HI` | R/W | `0x00` | Energy Detector | Energy detector threshold [15:8]; gates correlator lock |
-| `0x19` | `ENERGY_THR_LO` | R/W | `0x00` | Energy Detector | Energy detector threshold [7:0] |
+| `0x18` | `ENERGY_THR_HI` | R/W | `0x00` | Energy Measurement | Optional coarse energy-floor threshold [15:8]; used only if `SC_CFG.ENERGY_GATE_EN=1` |
+| `0x19` | `ENERGY_THR_LO` | R/W | `0x00` | Energy Measurement | Optional coarse energy-floor threshold [7:0] |
 | `0x1A` | `LOW_BAT_THR` | R/W | `0x02` | Control | Low battery threshold configuration |
 | `0x1B` | `DECIM_CFG` | R/W | `0x00` | ΣΔ Decimator | [1:0] DECIM_RATIO: 0=32× (1 MHz), 1=64× (500 kHz), 2=128× (250 kHz), 3=256× (125 kHz); [7:2] reserved |
 | `0x1C` | `SC_THR_HI` | R/W | `0x73` | Schmidl-Cox | Detection threshold θ_SC [15:8] (Q1.15); default 0.90 |
 | `0x1D` | `SC_THR_LO` | R/W | `0x33` | Schmidl-Cox | Detection threshold θ_SC [7:0] |
+| `0x1E` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Number of consecutive above-threshold SC hits required for `sc_lock`; valid range 1–3 |
+| `0x1F` | `SC_CFG` | R/W | `0x00` | Schmidl-Cox | [0] ENERGY_GATE_EN optional coarse energy floor enable; [7:1] reserved |
 | **Frequency Configuration** (`0x20`–`0x2F`) | | | | | |
 | `0x20` | `DELTA_F_HI` | R/W | `0x00` | Correlator Bank | Δf between NT=2 node frequencies [15:8], in Hz |
 | `0x21` | `DELTA_F_LO` | R/W | `0x00` | Correlator Bank | Δf [7:0], in Hz |
@@ -54,15 +56,15 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x4B` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] PACKET_ACTIVE; [3:1] PACKET_PHASE; [4] LIVE_FFT_READY; [5] W_PENDING; [6] W_VALID; [7] W_MISSED_PACKET |
 | `0x4C` | `W_CTRL` | R/W | `0x00` | Packet Control FSM / Combiner | [0] W_COMMIT write-1 pulse; [1] W_VALID read-only; [2] W_PENDING read-only; [3] W_MISSED_PACKET read-only; [7:4] reserved |
 | `0x4D` | `ACTIVE_ANTENNA_EN` | R | `0x0F` | Packet Control FSM | Latched active antenna mask for current packet |
-| **Energy Detector** (`0x50`–`0x57`) | | | | | |
-| `0x50` | `ENERGY_0_HI` | R | `0x00` | Energy Detector | Σ\|x\|² antenna 0 [15:8]; snapshot at correlator lock |
-| `0x51` | `ENERGY_0_LO` | R | `0x00` | Energy Detector | Σ\|x\|² antenna 0 [7:0] |
-| `0x52` | `ENERGY_1_HI` | R | `0x00` | Energy Detector | Σ\|x\|² antenna 1 [15:8] |
-| `0x53` | `ENERGY_1_LO` | R | `0x00` | Energy Detector | Σ\|x\|² antenna 1 [7:0] |
-| `0x54` | `ENERGY_2_HI` | R | `0x00` | Energy Detector | Σ\|x\|² antenna 2 [15:8] |
-| `0x55` | `ENERGY_2_LO` | R | `0x00` | Energy Detector | Σ\|x\|² antenna 2 [7:0] |
-| `0x56` | `ENERGY_3_HI` | R | `0x00` | Energy Detector | Σ\|x\|² antenna 3 [15:8] |
-| `0x57` | `ENERGY_3_LO` | R | `0x00` | Energy Detector | Σ\|x\|² antenna 3 [7:0] |
+| **Energy Measurement** (`0x50`–`0x57`) | | | | | |
+| `0x50` | `ENERGY_0_HI` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 0 [15:8]; snapshot at correlator lock |
+| `0x51` | `ENERGY_0_LO` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 0 [7:0] |
+| `0x52` | `ENERGY_1_HI` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 1 [15:8] |
+| `0x53` | `ENERGY_1_LO` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 1 [7:0] |
+| `0x54` | `ENERGY_2_HI` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 2 [15:8] |
+| `0x55` | `ENERGY_2_LO` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 2 [7:0] |
+| `0x56` | `ENERGY_3_HI` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 3 [15:8] |
+| `0x57` | `ENERGY_3_LO` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 3 [7:0] |
 | **Correlator Magnitudes — Node 1 (+Δf)** (`0x58`–`0x67`) | | | | | |
 | `0x58` | `CORR_MAG_0_HI` | R | `0x00` | Correlator Bank | \|H₀,₁\|² antenna 0, node 1 (+Δf) [15:8] |
 | `0x59` | `CORR_MAG_0_LO` | R | `0x00` | Correlator Bank | [7:0] |
@@ -230,7 +232,7 @@ PicoRV32: fetch from 0x00000, begin execution
 
 In auto mode the `ACTIVE_MODE` register (0x40) reports which mode is active for the current frame.
 
-**MODE=2 (passthrough):** Stages 3–7 (energy detector, correlator bank, FFT engine, weight computation, ALMMSE/MRC combiner) are bypassed entirely. The lowest-numbered antenna with its `ANTENNA_EN` bit set is selected; its int8 decimated I+Q samples are sign-extended to int16 and routed directly to REMOD_A. REMOD_B is held at zero (midscale input). PicoRV32 firmware is not involved and the W matrix registers are ignored. Use this mode to obtain a single-antenna baseline for SNR/BER comparison against MRC and ALMMSE combining gain.
+**MODE=2 (passthrough):** Stages 3–7 (energy measurement, correlator bank, FFT engine, weight computation, ALMMSE/MRC combiner) are bypassed entirely. The lowest-numbered antenna with its `ANTENNA_EN` bit set is selected; its int8 decimated I+Q samples are sign-extended to int16 and routed directly to REMOD_A. REMOD_B is held at zero (midscale input). PicoRV32 firmware is not involved and the W matrix registers are ignored. Use this mode to obtain a single-antenna baseline for SNR/BER comparison against MRC and ALMMSE combining gain.
 
 In MODE=0/1, before current-packet W has been committed, the live combiner also falls back to this bypass antenna. PicoRV32 writes W into shadow registers and commits it atomically; the combiner only reads the active W bank.
 
@@ -312,7 +314,7 @@ SX1257 gain register values, mirrored from PicoRV32 AGC loop writes. Host may pr
 
 ### `0x50`–`0x57` — ENERGY[0..3] (read-only)
 
-Per-antenna energy estimates `Σ|x|²` computed over the last 8 symbols by the energy detector. Snapshot latched at correlator lock. int16, unsigned, arbitrary units (proportional to received power before gain control).
+Per-antenna energy estimates `Σ|x|²` computed over the last 8 symbols by the energy measurement. Snapshot latched at correlator lock. int16, unsigned, arbitrary units (proportional to received power before gain control).
 
 Use for relative power comparison across antennas (e.g. to disable a faulty antenna via `ANTENNA_EN`).
 

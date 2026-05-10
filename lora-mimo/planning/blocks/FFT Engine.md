@@ -58,6 +58,48 @@ The FFT engine starts only after the capture controller has made the 8-symbol li
 
 ## Implementation notes
 
+### Natural sub-blocks
+
+Even if the FFT engine is implemented as one top-level RTL block, it naturally decomposes into the following sub-blocks:
+
+1. **Capture read / address generator**
+   - reads the correct samples from capture SRAM
+   - uses `timing_ref`, `M`, pass number, symbol index, and antenna index
+
+2. **Dechirp / pre-rotation front end**
+   - multiplies by the LoRa downchirp reference
+   - applies `eps_sub` time-domain phase correction in later passes
+
+3. **Pass controller / acquisition FSM**
+   - orchestrates Pass 1 (RCTSL), Pass 2 (integer bin), and Pass 3 (channel accumulation)
+   - iterates across antennas and controls staging-buffer reuse
+
+4. **FFT datapath core**
+   - radix-2 butterfly lanes
+   - twiddle-factor generation or storage
+   - stage scheduler and bit-reversal / stride sequencing
+
+5. **Working-buffer / SRAM interface**
+   - reads and writes staging data
+   - supports in-place transform access patterns
+   - must be organized so multi-lane butterfly parallelism is actually usable
+
+6. **Peak search / magnitude engine**
+   - computes magnitude or magnitude-squared
+   - finds `k0` / `k_peak` from FFT output
+
+7. **RCTSL interpolation block**
+   - uses the bins around the peak, e.g. `Y[-1]`, `Y[0]`, `Y[+1]`
+   - computes sub-bin `eps_sub`
+
+8. **Channel accumulation block**
+   - accumulates `D_j[s][k_peak]` across symbols
+   - produces the final `H` entries
+
+9. **Result / status export**
+   - drives `eps_sub`, `fft_done`, and status / debug outputs
+   - writes final `H` and related outputs to the visible register / SRAM region
+
 **Flexible Transform Length.** The live FSM must handle $N$ ranging from 32 (SF5 single-symbol passes) to 32,768 (8-symbol RCTSL SF12). If optional padded mode is implemented, it must also handle 65,536-point transforms. The number of passes is $\log_2(N)$.
 
 **RCTSL Pass.** Pass 1 reads 8 symbols from capture SRAM, dechirps them into the live staging buffer, performs the unpadded FFT, and then the PicoRV32 (or a hardwired quadratic block) computes `eps_sub` using the magnitudes around the peak. Zero padding does not add information; it only samples the same spectrum more densely, so it is reserved for optional diagnostics or low-SF validation if timing and SRAM budget allow.

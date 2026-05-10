@@ -219,6 +219,375 @@ Parameterised by SF (7, 9, 12) and BW (125, 500 kHz). Validates combining gain a
 
 Same sweep but with a time-varying Jakes channel at `f_D = 10 Hz`. Highlights SF12 degradation and motivates Kalman tracking.
 
+### NT=1 MRC robustness under Doppler
+
+**Motivation:** Gateway MRC assumes the preamble-derived phases and amplitudes remain valid across the packet. At high SF or with mobility, that can become false even if the packet is captured and detected correctly.
+
+**Question:** When does preamble-only MRC stop behaving like coherent combining and collapse toward `EGC`, `SC`, or single-antenna performance?
+
+**Experiment:** Add a notebook sweep over:
+
+- Doppler frequency `f_D`
+- SF (`7`, `9`, `12`)
+- payload length
+- combiner choice: `MRC`, `EGC`, `SC`
+
+Measure:
+
+- BER / PER
+- packet-to-packet `H` drift
+- within-packet phase drift relative to preamble estimate
+
+**Why it matters:** This is the clean way to decide whether the gateway can rely on one preamble estimate per packet, or whether long-packet / mobile cases need a tracking extension or policy fallback.
+
+### NT=1 MRC robustness under overlapping interference
+
+**Motivation:** Plain MRC is not an interference canceller. In a gateway setting, overlapping packets from other nodes are a real operating condition.
+
+**Question:** How much combining gain survives when a second packet is present, and when does the interferer contaminate the preamble enough to make MRC worse than a simpler mode?
+
+**Experiment:** Add a notebook sweep over:
+
+- desired/interferer power ratio
+- same-SF vs different-SF interferer
+- partial preamble overlap vs full overlap
+- spatial correlation between desired and interferer channels
+- combiner choice: `MRC`, `EGC`, `SC`, best single antenna
+
+Measure:
+
+- BER / PER on the desired packet
+- preamble-estimate bias
+- cases where fallback beats MRC
+
+**Why it matters:** This defines whether the gateway can treat collisions as extra noise, or whether it needs an interference-aware policy or a reject/fallback rule.
+
+---
+
+## Gateway System Considerations
+
+These are broader gateway-specific considerations beyond the base MRC algorithm. They should be treated as system-level checks during planning, simulation, and hardware bring-up.
+
+### Front-end mismatch and calibration
+
+Check sensitivity to:
+
+- per-antenna gain mismatch
+- per-antenna phase skew
+- IQ imbalance
+- DC offset
+- filter variation across RX chains
+
+Why it matters: coherent gain depends on the antenna branches behaving like a stable calibrated array, not just four independent receivers.
+
+### Shared-clock and phase-stability assumptions
+
+The current architecture benefits from common RX-side CFO across antennas. Verify the practical limits of that assumption under:
+
+- clock tree skew
+- PLL phase behaviour after retune or reset
+- temperature drift
+- long packet reception
+
+Why it matters: if cross-antenna phase is not stable enough, MRC and coherent estimation lose value.
+
+### AFE characterization for coherent combining
+
+Treat analog-front-end characterization as part of the hardware workstream, not only as later system validation.
+
+Priority measurements:
+
+- branch-to-branch LO frequency mismatch
+- LO drift versus time and temperature
+- branch-to-branch gain mismatch
+- branch-to-branch phase mismatch
+- IQ imbalance
+- DC offset / LO leakage
+- compression and blocker response
+- RX filter-response mismatch
+
+Why it matters: the DSP currently assumes the four receive branches are coherent enough for MRC and for shared-CFO estimation. Differential LO drift or unstable branch phase directly reduces combining gain and can invalidate the common-CFO assumption.
+
+Recommended measurement flow:
+
+1. Inject one common CW tone into all RX branches through a splitter
+2. Capture all four SX1257 `1-bit I/Q` sigma-delta outputs synchronously with FPGA logic
+3. Decimate to complex baseband and estimate per-branch amplitude, phase, and effective frequency offset
+4. Log branch-to-branch drift over time and temperature
+5. Sweep input power to find compression and mismatch changes
+6. Repeat with LoRa-like modulated input after the CW baseline is understood
+
+Instrument note:
+
+- the primary measurement path will be synchronous FPGA capture of the four `1-bit I/Q` outputs, followed by common offline decimation and estimation
+- a spectrum analyzer remains useful for absolute RF checks such as leakage, absolute carrier error, and compression
+- direct analog baseband observation is not the primary plan; the sigma-delta outputs are the practical observation point for the real digital receive chain
+
+Parameters to estimate from FPGA capture:
+
+- relative gain per branch
+- relative phase per branch
+- differential CFO / effective LO offset per branch
+- phase drift over packet timescales
+- IQ image rejection / imbalance indicators
+- DC / low-frequency spur level
+- mismatch growth near compression
+
+Estimator definitions:
+
+Let `x_j[n]` be the common-decimated complex baseband for branch `j`, and choose branch 0 as the reference unless a different branch is explicitly designated.
+
+For a CW test tone, first estimate the common tone bin or frequency, then form a complex tone estimate per branch:
+
+```text
+a_j = (1/N) * Σ_n x_j[n] * exp(-j 2π f_hat n / f_s)
+```
+
+where:
+
+- `a_j` is the complex fitted tone for branch `j`
+- `f_hat` is the estimated tone frequency
+- `f_s` is the decimated complex sample rate
+
+Use `a_j` to define:
+
+- **Relative gain**
+
+  ```text
+  G_j_dB = 20 log10(|a_j| / |a_0|)
+  ```
+
+- **Relative phase**
+
+  ```text
+  phi_j = angle(a_j * conj(a_0))
+  ```
+
+- **Differential CFO / effective LO offset**
+
+  Estimate the per-branch residual phase slope relative to branch 0:
+
+  ```text
+  r_j[n] = x_j[n] * conj(x_0[n])
+  df_j = (f_s / 2π) * slope(unwrap(angle(r_j[n])))
+  ```
+
+  where `slope(.)` is a least-squares phase slope in radians/sample.
+
+- **Phase drift over packet timescale**
+
+  Divide the capture into windows and track:
+
+  ```text
+  phi_j[k] = angle(a_j[k] * conj(a_0[k]))
+  drift_j = slope(phi_j[k] versus time)
+  ```
+
+  Report both peak-to-peak phase wander and fitted drift rate.
+
+- **IQ image rejection indicator**
+
+  For a positive-frequency CW input, after FFT:
+
+  ```text
+  IRR_j_dB = 10 log10(P_desired / P_image)
+  ```
+
+  where `P_desired` is power in the expected tone bin and `P_image` is power in the mirrored negative-frequency bin.
+
+- **DC / low-frequency spur**
+
+  ```text
+  DC_j_dBc = 10 log10(P_DC / P_desired)
+  ```
+
+  using the DC bin or a small band around DC.
+
+- **Compression onset**
+
+  Sweep input power and track fitted branch amplitude:
+
+  ```text
+  C_j(Pin) = G_j_small_signal - G_j(Pin)
+  ```
+
+  Compression onset is the input level where gain drops by the chosen criterion, for example `1 dB`.
+
+Recommended reporting:
+
+- branch-to-reference values for all four branches
+- worst-case spread across branches
+- mean and standard deviation across repeated captures
+- time-series plots for `df_j` and `phi_j` during drift tests
+
+LoRa-like modulated input extension:
+
+- reuse the same branch-0 reference convention
+- replace the single-tone fit with preamble-based channel estimates `h_j`
+- compute relative gain from `|h_j|`, relative phase from `angle(h_j * conj(h_0))`, and drift from packet-to-packet or symbol-to-symbol change in `h_j`
+
+Measurement disposition and fallback policy:
+
+Every measured impairment should map to one of four outcomes:
+
+1. **Accept**  
+   Impairment is small enough that predicted combining loss is negligible.
+
+2. **Calibrate**  
+   Impairment is stable and can be corrected in firmware, DSP, or a board-calibration table.
+
+3. **Mask / degrade gracefully**  
+   Impairment is too large for ideal `NR=4 MRC`, but the system can still operate by disabling a branch or falling back to `EGC`, `SC`, or a reduced-antenna mode.
+
+4. **Escalate to hardware action**  
+   Impairment is dynamic or large enough that calibration is not reliable, indicating a board, clocking, routing, or AFE problem.
+
+Recommended mapping by metric:
+
+- `G_j_dB` too large but stable:
+  calibrate or compensate in channel/weight estimation
+
+- `phi_j` too large but stable:
+  calibrate as static branch phase offset
+
+- `df_j` too large but stable:
+  add per-branch compensation or tighten operating assumptions
+
+- `df_j` drifting over packet timescale:
+  treat as a coherence risk; fall back from full MRC if needed, or escalate to hardware investigation
+
+- `drift_j` too large:
+  treat as a packet-coherence red flag; consider `EGC`, `SC`, branch masking, or limiting supported long-packet operating points
+
+- poor `IRR_j_dB` or high `DC_j_dBc`:
+  accept if within budget, otherwise calibrate or down-rank the branch
+
+- early or branch-specific compression from `C_j(Pin)`:
+  retune AGC thresholds, add saturation masking, or escalate if one branch is materially worse than the rest
+
+Severity bands:
+
+- **Green**: normal `NR=4 MRC`
+- **Yellow**: calibration and monitoring required
+- **Red**: fallback mode or hardware action required
+
+Operational fallbacks to support:
+
+- disable one or more bad branches
+- fall back from `MRC` to `EGC`
+- fall back from `MRC` to `SC` / best antenna
+- suppress current-packet coherent combining when confidence is poor
+- maintain per-branch health flags for firmware decisions
+
+Relevant datasheet reference numbers:
+
+- `SX1257`
+  - synthesizer range: `862-1020 MHz`
+  - synthesizer step: `68.7 Hz` typ at `36 MHz` reference
+  - external clock jitter spec: `0.01%` max
+  - RX noise figure: `7 dB` typ, `10 dB` max
+  - RX gain range: `70 dB` typ
+  - RX IIP3: `+10 dBm` at lowest LNA gain, `-25 dBm` typ at highest LNA gain
+  - RX IQ gain mismatch: `0.5 dB` typ, `1 dB` max
+  - RX IQ phase mismatch: `1 deg` typ, `3 deg` max
+  - crystal note: initial tolerance, temperature stability, and aging must be chosen to match the target operating range and receiver bandwidth
+
+- `SX1302`
+  - system clock: single `32 MHz` source from companion RF front-end
+  - recommended reference: `0.5 ppm` GPS-grade TCXO
+  - LoRa carrier frequency-offset tolerance for less than `3 dB` degradation: about `+/-0.25 * BW`, assuming `0.5 ppm` gateway reference precision
+
+- `SE2435L`
+  - RX gain: `16 dB` typ, `18 dB` max
+  - RX noise figure: `2 dB` typ, `2.5 dB` max
+  - RX IIP3: `-2 dBm` typ
+  - RX IP1dB: `-12 dBm` typ
+  - gain variation across frequency range: `2 dBp-p`
+  - antenna-port isolation: `20 dB` typ
+
+Important limitation:
+
+- these datasheet numbers do not specify branch-to-branch LO drift mismatch or relative phase stability across four assembled receive chains
+- that coherence risk still has to be measured directly in hardware
+
+Suggested acceptance framing:
+
+- gain mismatch after calibration within a defined dB budget
+- differential LO drift small enough that MRC loss stays within the combining-loss budget
+- branch phase stability maintained over the longest target packet duration
+- no branch enters compression at the expected blocker level
+
+### AGC, clipping, and near-far behaviour
+
+Study:
+
+- whether one strong branch sets gain badly for weaker branches
+- how saturation on one branch affects channel estimation and combining
+- whether a clipped or compressed branch should be masked
+
+Why it matters: gateway operation is often blocker-limited rather than thermal-noise-limited.
+
+### Antenna correlation and placement
+
+Check the impact of:
+
+- antenna spacing
+- polarization choice
+- enclosure effects
+- mounting environment and nearby metal
+
+Why it matters: four antennas only provide full diversity benefit if the branches are not too correlated.
+
+### Branch health and masking policy
+
+Define how the gateway detects and handles:
+
+- dead or noisy antenna paths
+- swapped IQ or polarity issues
+- abnormal phase outliers
+- stuck decimator / ADC behaviour
+
+Why it matters: a bad branch can silently degrade MRC if it is always trusted.
+
+Current status:
+
+- basic contingencies already exist in the architecture:
+  - `ANTENNA_EN` can disable one or more branches
+  - bypass fallback exists when W is not ready or missed
+  - saturation-discard behavior already exists in the AGC / H-estimation path
+- what is still missing is a concrete runtime health-check framework
+
+Still to define:
+
+- a branch-health status register or bitmask
+- firmware rules for asserting degraded or failed branch state
+- thresholds for when branch mismatch, drift, DC spur, or compression should trigger masking
+- policy for when to prefer `MRC`, `EGC`, `SC`, or reduced-antenna operation
+- whether health state is packet-local, sticky-until-clear, or both
+
+### Detection robustness and fallback policy
+
+Define what the gateway should do when confidence is poor, for example:
+
+- weak or contaminated preamble estimate
+- branch saturation
+- inconsistent cross-antenna phase
+- false-lock risk
+- missed timing budget for weight handoff
+
+Why it matters: a bad MRC decision can be worse than best-antenna or bypass.
+
+### Network-level value
+
+Translate gateway improvements into system metrics such as:
+
+- packet success at cell edge
+- achievable node TX power reduction
+- coverage improvement
+- throughput under collision-heavy traffic
+
+Why it matters: gateway value should be measured in packet delivery and coverage, not only BER.
+
 ---
 
 ## Fixed-Point Analysis

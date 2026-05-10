@@ -43,13 +43,13 @@
 
 ---
 
-### Block 2 — Energy Detector
+### Block 2 — Energy Measurement
 
-**Pass criterion:** `ENERGY[n]` registers match `Σ|x|²` computed by Python reference over the same 8-symbol window. Zero false gates on noise-only input (SNR < −20 dB) over 1000 trials.
+**Pass criterion:** `ENERGY[n]` registers match `Σ|x|²` computed by Python reference over the same 8-symbol window. Lock-latched energy snapshot is stable and packet-consistent.
 
 **Method:**
 - Inject known-amplitude sine through decimator → measure ENERGY vs Python reference
-- Noise-only input (PRBS) → verify energy threshold gate blocks correlator trigger
+- Assert a known correlator-lock event → verify the exported energy snapshot matches the expected lock-time window
 
 ---
 
@@ -71,6 +71,7 @@
 | NT=2, both nodes present | lock, both H columns valid, cross-term < −20 dB |
 | Noise only (no preamble) | no lock for 1000 symbol periods |
 | Δf mismatch (±1 bin) | no lock — confirms bin selectivity |
+| `SC_HITS_REQ` sweep (1,2,3) | lower hit count reduces latency / sensitivity threshold; higher hit count reduces false locks |
 
 ---
 
@@ -189,6 +190,24 @@ Connects `I_IN`/`Q_IN` to `I_OUT`/`Q_OUT` inside the SX1257 — validates the ro
 | --- | --- | --- |
 | I/Q gain mismatch | Enable RF loopback; inspect decimator output spectrum | < 1 dB mismatch |
 | TX DC offset | Check FFT bin 0 from diagnostic capture | < −30 dBc |
+
+### AFE characterization before full-system integration
+
+These checks are intended to de-risk coherent combining before full packet-path testing is available. The primary method is synchronous FPGA capture of the four SX1257 `1-bit I/Q` outputs after injecting a common RF source through a 4-way splitter.
+
+| Test | Method | Pass criterion |
+| --- | --- | --- |
+| Per-branch LO offset | Inject one common CW tone; capture 4 synchronized sigma-delta streams in FPGA; decimate and estimate `df_j` from inter-branch phase slope | Branch-to-branch frequency mismatch within defined drift budget |
+| LO drift vs time | Hold common CW tone; log `df_j` and `phi_j` over time from FPGA capture | Drift remains within packet-coherence budget |
+| LO drift vs temperature | Repeat common-tone FPGA capture across temperature range | No branch exceeds allowed differential drift |
+| RX gain mismatch | Inject one common CW tone; estimate `G_j_dB` from fitted branch tone amplitude | Gain spread within calibration budget |
+| Branch phase mismatch | Inject one common CW tone; estimate `phi_j` after common decimation | Residual phase mismatch within combining budget |
+| Compression / near-far | Sweep input power with common tone; track `C_j(Pin)` and mismatch growth per branch | Compression onset variation within allowed budget |
+| LO leakage / DC spur | Measure `DC_j_dBc` after decimation; optionally cross-check with spectrum analyzer | Spur level low enough not to corrupt channel estimation |
+
+**Supporting instrument:** Spectrum-analyzer measurements are still useful for absolute RF checks such as leakage, carrier placement, and compression, but the FPGA capture path is the primary method for coherent branch characterization.
+
+**Disposition rule:** A failed AFE characterization result must not stop at "out of spec". Each failure must be classified as `accept`, `calibrate`, `mask/fallback`, or `hardware action`, with the chosen mitigation recorded before moving to full MIMO integration.
 
 ---
 

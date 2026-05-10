@@ -81,10 +81,10 @@ SC_j[s] = dot( dechirp(rx_j, s) ,  dechirp(rx_j, s+1)* )
 ```
 
 **Outputs:**
-- `sc_lock` — asserted when Λ exceeds threshold for two consecutive symbol pairs
+- `sc_lock` — asserted when Λ exceeds threshold for the configured number of consecutive symbol pairs
 - `timing_ref` — estimated preamble-start sample index in `iq_valid` units, used to align FFT capture windows
 
-`sc_lock` is not the FFT compute trigger. Since a two-hit Schmidl-Cox detector asserts only after observing about three symbols from the candidate preamble start, `timing_ref` is back-calculated to the estimated preamble origin. The Packet Control FSM then waits only until the live 8-symbol RCTSL window is resident:
+`sc_lock` is not the FFT compute trigger. Since a Schmidl-Cox detector with `N_hit` required hits asserts only after observing about `N_hit + 1` symbols from the candidate preamble start, `timing_ref` is back-calculated to the estimated preamble origin. The Packet Control FSM then waits only until the live 8-symbol RCTSL window is resident:
 
 ```
 fft_start      = timing_ref
@@ -236,15 +236,21 @@ To prevent out-of-band noise from aliasing into the signal path, the **SX1257 an
 **Note:** If the analog filter is left wider than the digital sampling rate (e.g., decimate to 125 kS/s while filtering at 750 kHz), any signals or noise in the 62.5 kHz to 375 kHz range will alias directly into the LoRa signal band.
 
 ### 2. Schmidl-Cox Threshold Calibration
-The detection threshold `θ_SC` (register `SC_THR`) should be set per deployment environment.
+Schmidl-Cox sensitivity should be configurable per deployment environment with two knobs:
+
+- detection threshold `θ_SC` via register `SC_THR`
+- consecutive hit requirement via register `SC_HITS_REQ`
+
+Recommended starting points:
 *   **Default:** 0.90 (works well for static indoor channels; matches rpp0/gr-lora default).
 *   **Low SNR / mobile:** reduce to 0.75 to trade false-alarm rate for sensitivity.
+*   **Hit count:** default `SC_HITS_REQ = 2`; reduce to `1` for aggressive weak-signal mode, increase to `3` for conservative/noisy environments.
 *   **False-alarm floor:** at threshold 0.90, noise-only Λ < 0.10 with > 99.9% probability (SF7, NR=4).
 
 ### 3. Resolution & Calibration
 Running at lower bandwidths (e.g., 125 kHz) increases frequency resolution by **8×** ($122 \text{ Hz}$ per bin at SF7).
 *   **Bring-up Tip:** Perform initial crystal calibration and CFO estimation at the lowest bandwidth to achieve the highest precision before switching to wideband modes.
-*   **Automatic Gain Scaling:** The `ΣΔ Decimator` provides automatic scaling; however, ensure that the `SC_THR` is re-evaluated if switching between $R=32$ and $R=256$, as the noise floor shape may change slightly due to different CIC stopband responses.
+*   **Automatic Gain Scaling:** The `ΣΔ Decimator` provides automatic scaling; however, ensure that `SC_THR` and, if needed, `SC_HITS_REQ` are re-evaluated if switching between $R=32$ and $R=256$, as the noise floor shape may change slightly due to different CIC stopband responses.
 
 ---
 

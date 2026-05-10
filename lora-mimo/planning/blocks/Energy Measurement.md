@@ -1,6 +1,6 @@
-# Energy Detector
+# Energy Measurement
 
-RX path stage 3. See [DSP Flow](../DSP%20Flow.md) for context.
+RX path stage 3 support function inside the Schmidl-Cox / correlator path. See [DSP Flow](../DSP%20Flow.md) for context.
 
 **Owner:** TBD
 **Status:** Not started
@@ -9,7 +9,18 @@ RX path stage 3. See [DSP Flow](../DSP%20Flow.md) for context.
 
 ## Function
 
-Computes per-antenna received power `Σ|x|²` over a sliding window of one symbol period. Used to gate the correlator bank — prevents false triggers on noise — and exposed in status registers for diagnostic purposes.
+Computes per-antenna received power `Σ|x|²` over a sliding window of one symbol period.
+
+This is still required, but it is no longer treated as a separate top-level detector block. Its outputs are used for:
+
+- Schmidl-Cox normalization support
+- AGC energy snapshot at correlator lock
+- diagnostic/status readback
+
+So the architectural role is:
+
+- **energy measurement:** yes
+- **standalone detector block:** no
 
 ---
 
@@ -24,8 +35,7 @@ Computes per-antenna received power `Σ|x|²` over a sliding window of one symbo
 | `rst_n` | in | — | — | Active-low reset |
 | `energy[3:0]` | out | 4×16 unsigned | per symbol | Σ\|x\|² per antenna, latched at end of symbol window |
 | `energy_valid` | out | 1 | per symbol | Pulses high when `energy` outputs updated |
-| `above_threshold` | out | 1 | per symbol | High if any antenna exceeds `energy_threshold` |
-| `energy_threshold` | in | 16 unsigned | static | Gate level; from `ENERGY_THR` register (0x18) |
+| `energy_snapshot_valid` | out | 1 | at lock / per symbol | Pulses when the exported energy values are updated or latched |
 
 ---
 
@@ -45,7 +55,9 @@ Computes per-antenna received power `Σ|x|²` over a sliding window of one symbo
 
 **Window alignment.** Symbol window derived from `iq_valid` count — reset accumulator every 2^SF valid samples. Must be synchronised with the correlator bank symbol clock.
 
-**Threshold register.** Set by host or firmware via `ENERGY_THR` (0x18/0x19). High sensitivity requires a low threshold, but risks false triggers on noise. AGC loop may adjust this dynamically.
+**Integration location.** Implement this logic inside the Schmidl-Cox / correlator block or as a tightly coupled submodule. Do not treat it as a separate packet detector in the top-level RTL partition.
+
+**Lock snapshot.** At `CORR_LOCK`, latch the current per-antenna energy values into the status registers so PicoRV32 AGC reads one packet-consistent snapshot.
 
 ---
 
@@ -54,8 +66,8 @@ Computes per-antenna received power `Σ|x|²` over a sliding window of one symbo
 | Test | Method | Pass criterion |
 | --- | --- | --- |
 | Known amplitude sine | cocotb | `energy` matches Python `np.sum(np.abs(x)**2)` to ±2 LSB |
-| Noise-only input | PRBS at low level | `above_threshold` not asserted over 1000 symbol periods |
-| Symbol-rate energy update | Count `energy_valid` pulses | One per symbol period |
+| Symbol-rate energy update | Count `energy_snapshot_valid` pulses | One per symbol period or correct lock-latched update behavior |
+| Lock snapshot | Assert `CORR_LOCK` on known packet | Exported energy matches the expected symbol-window energy at lock |
 | All 4 antennas independent | Different gains per channel | Each `energy[n]` matches per-channel Python reference |
 
 ---
@@ -63,5 +75,6 @@ Computes per-antenna received power `Σ|x|²` over a sliding window of one symbo
 ## Related blocks
 
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — provides int8 input
-- [Correlator Bank](Correlator%20Bank.md) — gated by `above_threshold`
-- [Register Map](../Register%20Map.md) — `ENERGY[0..3]` at `0x50`–`0x57`, `ENERGY_THR` at `0x18`
+- [Correlator Bank](Correlator%20Bank.md) — owns the main acquisition path and should host this logic
+- [AGC](AGC.md) — consumes the lock-latched per-antenna energy values
+- [Register Map](../Register%20Map.md) — `ENERGY[0..3]` at `0x50`–`0x57`

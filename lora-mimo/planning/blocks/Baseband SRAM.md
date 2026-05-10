@@ -9,7 +9,7 @@ Memory block. See [System Architecture](../System%20Diagram.md) for context.
 
 ## Function
 
-544 KB single-port OpenRAM macro on GF180MCU. Shared between the FFT engine and PicoRV32 firmware via a priority arbiter. Two logical regions with non-overlapping address ranges.
+544 KB single-port SRAM block on GF180MCU, shared between the FFT engine and PicoRV32 firmware via a priority arbiter. Two logical regions with non-overlapping address ranges.
 
 ---
 
@@ -55,7 +55,7 @@ Word-addressed access: byte address >> 2 = word address. Byte enables optional (
 
 ## Arbiter
 
-Simple fixed-priority arbiter: FFT engine has priority over PicoRV32 during READ/COMPUTE/PEAK phases. PicoRV32 is stalled (wait-state on Wishbone) until granted.
+Simple fixed-priority arbiter: FFT engine has priority over PicoRV32 during READ/COMPUTE/PEAK phases. PicoRV32 is stalled (wait-state on AHB-Lite) until granted.
 
 ```
 if req[0]:   grant[0] = 1, grant[1] = 0   // FFT wins
@@ -80,16 +80,31 @@ The capture/FFT path must not stall the live decimator-to-combiner-to-remod stre
 
 ---
 
-## OpenRAM generation
+## SRAM macro path
 
-Generate using the GF180MCU OpenRAM PDK configuration:
+OpenRAM support for GF180MCU is not assumed to be available today, so this block is currently an enablement item rather than a solved macro choice.
 
-```
-word_size  = 32          # bits
-num_words  = 139264      # 544 KB / 4 bytes = 136K words
-```
+Required outcomes:
 
-**Action required before floorplan:** Run the GF180MCU OpenRAM compiler to get actual area, timing, and power numbers. Estimated area scales from ~4.2 mm² for 512 KB to ~4.5 mm² for 544 KB — verify before committing to floorplan. If a single 544 KB macro is not available, split into 256 KB FFT staging + 288 KB capture macros with address decode logic. If optional padded diagnostics are dropped, the live FFT staging requirement falls to 128 KB and the memory map can be reduced.
+- a realizable SRAM macro path for GF180MCU
+- area, timing, and power estimates early enough to influence floorplan
+- a simulation model that lets RTL and firmware continue before the final macro is settled
+
+Candidate paths:
+
+1. enable or port an OpenRAM flow that actually supports the target GF180 stack
+2. use an alternative SRAM compiler / macro source compatible with the competition flow
+3. split the memory into smaller macros if a monolithic 544 KB block is not practical
+4. use behavioural SRAM models for simulation while the physical macro path is still being worked out
+
+Suggested split if a single macro is not practical:
+
+- `256 KB` FFT staging
+- `288 KB` capture SRAM
+
+If optional padded diagnostics are dropped, the live FFT staging requirement falls to `128 KB`, which reduces pressure on the macro path and should remain an available fallback.
+
+**Action required before floorplan:** Resolve the SRAM macro path early. This is a foundational block for the project and also a useful competition contribution in its own right if a reusable GF180MCU SRAM flow is established.
 
 ---
 

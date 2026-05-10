@@ -84,7 +84,7 @@ MODE=2 passthrough:   y[0] = sign_extend(x[bypass_sel]); y[1] = 0
 
 This makes the first packet recoverable as a single-antenna packet if W arrives late, and prevents mid-preamble silence from breaking SX1302 detection.
 
-**W register read timing.** W registers must be double-buffered. PicoRV32 writes `W_SHADOW` via Wishbone, then asserts a one-cycle commit strobe after all words are written. Hardware copies `W_SHADOW` to `W_ACTIVE` atomically and sets `W_valid`. The combiner reads only `W_ACTIVE`, so firmware writes cannot glitch live MACs. If W is invalidated mid-packet, keep using the last committed `W_ACTIVE` until firmware explicitly clears `W_valid` or changes mode.
+**W register read timing.** W registers must be double-buffered. PicoRV32 writes `W_SHADOW` via AHB-Lite, then asserts a one-cycle commit strobe after all words are written. Hardware copies `W_SHADOW` to `W_ACTIVE` atomically and sets `W_valid`. The combiner reads only `W_ACTIVE`, so firmware writes cannot glitch live MACs. If W is invalidated mid-packet, keep using the last committed `W_ACTIVE` until firmware explicitly clears `W_valid` or changes mode.
 
 **No-glitch switching.** `W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` must update only when the receiver is idle between packets. Host writes to `MODE` or `ANTENNA_EN` update shadow configuration during an active packet and commit at the next idle boundary. If current-packet W is not ready, stay in bypass for that packet rather than switching mid-symbol or at a payload boundary.
 
@@ -104,7 +104,7 @@ This makes the first packet recoverable as a single-antenna packet if W arrives 
 | NT=2 ALMMSE, ill-conditioned H | κ(H) >> 1 | Output valid, no int16 overflow/wrap |
 | No current W | Start packet with `W_valid=0` | Output follows `bypass_ant`; REMOD_A receives a valid single-antenna stream |
 | W commit | Write W shadow then commit | `W_ACTIVE` changes atomically; no partially-written W appears at output |
-| W update mid-packet | Write new W via Wishbone during combining | Old W used until commit; no glitch |
+| W update mid-packet | Write new W via AHB-Lite during combining | Old W used until commit; no glitch |
 | Safe switch | Assert W commit while packet is active | W activation is deferred until the next idle boundary |
 | Mode write mid-packet | Host writes MODE/ANTENNA_EN during active packet | `ACTIVE_MODE`/`ACTIVE_ANTENNA_EN` unchanged until next idle boundary |
 | Passthrough, ant0 selected | MODE=2, ANTENNA_EN=0001, inject sine on ant0, zeros on ant1–3 | y[0] = sign_extend(x_ant0); y[1] = 0; identical to decimator output |
@@ -117,7 +117,7 @@ This makes the first packet recoverable as a single-antenna packet if W arrives 
 ## Related blocks
 
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — int8 input
-- [PicoRV32 Integration](PicoRV32%20Integration.md) — writes W via Wishbone
+- [PicoRV32 Integration](PicoRV32%20Integration.md) — writes W via AHB-Lite
 - [ΣΔ Re-modulator](ΣΔ%20Re-modulator.md) — consumes int16 output
 - [Register Map](../Register%20Map.md) — `W` matrix at `0x90`–`0xAF`
 - [DSP Flow](../DSP%20Flow.md)

@@ -60,7 +60,7 @@ The block must normalize the result before the FIR stage to maintain constant si
 
 **FIR Compensation.** The droop shape depends on $R$. However, since LoRa is a wideband signal and we are sampling at the Nyquist rate ($f_s = BW$), the correction is primarily for the roll-off at the band edges. A single FIR coefficient set optimized for $R=32$ is usually sufficient for higher ratios, but a programmable coefficient SRAM can be added if silicon characterization shows significant ripple.
 
-**Clock domain.** Entire block runs at 32 MHz. `iq_valid` rate changes with `decim_ratio`. All downstream DSP (Energy Detector, Correlator, Combiner) must use `iq_valid` as their clock enable.
+**Clock domain.** Entire block runs at 32 MHz. `iq_valid` rate changes with `decim_ratio`. All downstream DSP (Energy Measurement, Correlator, Combiner) must use `iq_valid` as their clock enable.
 
 ---
 
@@ -78,6 +78,6 @@ The block must normalize the result before the FIR stage to maintain constant si
 ## Related blocks
 
 - [Register Map](../Register%20Map.md) — `DECIM_CFG` at `0x1B`
-- [Energy Detector](Energy%20Detector.md) — clock-gated by `iq_valid`
+- [Energy Measurement](Energy%20Measurement.md) — clock-gated by `iq_valid`
 - [Correlator Bank](Correlator%20Bank.md) — integration length remains $2^{SF}$ samples
 - [DSP Flow](../DSP%20Flow.md) — updated pipeline rates

@@ -93,4 +93,4 @@ Write CPU_RESET=0 (0x02 ← 0x00)
 - [Register Map](../Register%20Map.md) — all register addresses
 - [Baseband SRAM](Baseband%20SRAM.md) — burst read source (`0x40000`–`0x87FFF` capture region)
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — IMEM target for firmware load; CPU_RESET register
-- [Wishbone Bus](Wishbone%20Bus.md) — internal bus for register access
+- [AHB-Lite Bus](AHB-Lite%20Bus.md) — internal bus for register access

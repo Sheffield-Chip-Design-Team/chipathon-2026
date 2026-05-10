@@ -3,9 +3,12 @@
 Stage 3 — Energy Detector:
   See sim.stages for energy_detector
 
-Stage 4 — FFT-based channel estimation (replaces CorrelatorBank):
-  h_hat_j = D_j[k_peak] / M   where D_j = FFT(dechirp(rx_j))
-  k_peak found by incoherent sum across antennas and symbols.
+Stage 4 — FFT-based channel estimation (gr-lora_sdr style):
+  1. Fractional CFO via RCTSL: 2× zero-padded FFT on concatenated dechirped
+     preamble + quadratic correction around peak (Cui Yang et al.).
+  2. Time-domain CFO correction applied to all preamble samples.
+  3. Incoherent peak search on corrected signal (same bin for all antennas).
+  4. Coherent average: h_hat_j = mean_s D_j[k_peak] / M
 
 Stage 5a — Phase extraction (firmware):
   φ_j = ∠ h_hat_j
@@ -32,46 +35,115 @@ from .fixed import quantize_q1_15
 # Stage 4 — FFT-based channel estimation
 # ---------------------------------------------------------------------------
 
-def estimate_channel(rx_preamble: np.ndarray, M: int, N_sym: int) -> np.ndarray:
+def _cfo_frac_rctsl(rx_preamble: np.ndarray, M: int, N_sym: int) -> float:
+    """
+    Fractional CFO estimation using the RCTSL algorithm (Cui Yang et al.),
+    with incoherent multi-antenna combining.
+
+    All NR antennas share the same TCXO so the CFO ε is identical across all
+    antennas — only the channel phase ∠h_j differs per antenna.  An incoherent
+    sum P = Σ_j |D_j|² is used rather than coherent two-pass combining because:
+
+    - At high SNR the (Σ|h_j|²) factor cancels out of the RCTSL formula entirely,
+      giving the same sub-bin accuracy as coherent combining.
+    - At low SNR, coherent two-pass introduces a correlated bias: the phase
+      estimates φ_j = ∠D_j[k0] are derived from the same noisy data as the
+      adjacent bins Y₁, Y₋₁, which distorts the (Y₁ − Y₋₁) ratio that RCTSL
+      relies on.  The incoherent sum is bias-free.
+
+    Mirrors gr-lora_sdr frame_sync_impl::estimate_CFO_frac() extended to NR antennas:
+      - Concatenate N_sym dechirped preamble symbols (extended downchirp).
+      - 2× zero-padded FFT, incoherent |·|² sum across all NR antennas.
+      - RCTSL quadratic correction around the peak → ~1/20-bin accuracy.
+
+    Returns cfo_frac in bins, range (−0.5, 0.5].
+    """
+    NR = rx_preamble.shape[0]
+    L  = N_sym * M
+
+    # Extended downchirp: periodic with period M across all N_sym symbols
+    n_aug  = np.arange(L)
+    dc_aug = np.exp(-1j * np.pi * (n_aug % M) ** 2 / M)
+
+    # 2× zero-padded incoherent magnitude-squared sum across all antennas
+    fft_len = 2 * L
+    P = np.zeros(fft_len)
+    for j in range(NR):
+        dechirped = rx_preamble[j, :L] * dc_aug
+        P += np.abs(np.fft.fft(dechirped, n=fft_len)) ** 2
+
+    k0  = int(np.argmax(P))
+    Y_1 = P[(k0 - 1) % fft_len]
+    Y0  = P[k0]
+    Y1  = P[(k0 + 1) % fft_len]
+
+    # RCTSL quadratic correction — rectangular-window constants (Cui Yang Eq. 15)
+    u     = 64 * M / 406.5506497
+    v     = u * 2.4674
+    denom = u * (Y1 + Y_1) + v * Y0
+    wa    = (Y1 - Y_1) / denom if abs(denom) > 1e-12 else 0.0
+    ka    = wa * M / np.pi
+
+    # Normalise peak position back to single-symbol bins, wrap to (−0.5, 0.5]
+    k_residual = ((k0 + ka) / (2.0 * N_sym)) % 1.0
+    return k_residual - (1.0 if k_residual > 0.5 else 0.0)
+
+
+def estimate_channel(rx_preamble: np.ndarray, M: int, N_sym: int,
+                     eps_sub: float = None) -> np.ndarray:
     """
     Estimate per-antenna channel coefficients from N_sym preamble upchirps.
 
-    Algorithm
-    ---------
-    1. Dechirp each symbol: d[n] = rx[n] · exp(-jπn²/M)
-    2. FFT → tone at bin k_peak = timing_offset + round(CFO·M/BW)
-    3. Peak bin found by incoherent magnitude sum across all antennas and
-       symbols — robust to timing and CFO, same bin for all antennas.
-    4. Coherently average D[k_peak] / M across N_sym symbols per antenna.
+    Algorithm (gr-lora_sdr style)
+    ------------------------------
+    1. Estimate fractional CFO via RCTSL (Cui Yang et al.) unless eps_sub is
+       supplied by the caller (e.g. from SchmidlCoxDetector).
+    2. Apply time-domain CFO correction: rx_corr[n] = rx[n] · exp(−j2π·ε·n/M).
+    3. Incoherent peak search: sum |FFT(dechirp(rx_corr_j,s))| across all
+       antennas j and symbols s → integer peak bin k_peak.
+    4. Coherent average of D_j[k_peak] / M across N_sym symbols per antenna.
+       No inter-symbol phase rotation needed — CFO already removed in step 2.
 
     Parameters
     ----------
     rx_preamble : (NR, N_sym * M) complex array
     M           : samples per symbol (2^SF)
     N_sym       : number of preamble symbols
+    eps_sub     : fractional CFO in bins (−0.5, 0.5]; estimated via RCTSL if None
 
     Returns
     -------
     h_hat : (NR,) complex channel estimates
     """
     NR = rx_preamble.shape[0]
-    n = np.arange(M)
-    ref = np.exp(-1j * np.pi * n**2 / M)
+    L  = N_sym * M
 
-    # Incoherent peak search across all antennas and symbols
+    # Step 1: fractional CFO — RCTSL if not supplied
+    if eps_sub is None:
+        eps_sub = _cfo_frac_rctsl(rx_preamble, M, N_sym)
+
+    # Step 2: time-domain CFO correction
+    n_full  = np.arange(L)
+    cfo_corr = np.exp(-1j * 2 * np.pi * eps_sub * n_full / M)
+    rx_corr  = rx_preamble[:, :L] * cfo_corr[np.newaxis, :]
+
+    # Step 3: incoherent peak search on CFO-corrected signal
+    n   = np.arange(M)
+    ref = np.exp(-1j * np.pi * n ** 2 / M)
+
     mag_sum = np.zeros(M)
     for j in range(NR):
         for s in range(N_sym):
-            seg = rx_preamble[j, s*M:(s+1)*M]
+            seg = rx_corr[j, s * M:(s + 1) * M]
             mag_sum += np.abs(np.fft.fft(seg * ref))
     peak_bin = int(np.argmax(mag_sum))
 
-    # Coherent average of complex peak value per antenna
+    # Step 4: coherent average of complex peak value per antenna
     h_hat = np.zeros(NR, dtype=complex)
     for j in range(NR):
         acc = 0j
         for s in range(N_sym):
-            seg = rx_preamble[j, s*M:(s+1)*M]
+            seg = rx_corr[j, s * M:(s + 1) * M]
             acc += np.fft.fft(seg * ref)[peak_bin]
         h_hat[j] = acc / (N_sym * M)
 
