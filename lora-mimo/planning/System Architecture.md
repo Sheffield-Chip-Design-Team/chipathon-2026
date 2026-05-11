@@ -3,6 +3,8 @@
 > Architecture B — NT=1 NR=4 MRC / NT=2 NR=4 ALMMSE multi-mode MIMO gateway ASIC.
 > GF180MCU. SSCS PICO Chipathon 2026. Tapeout deadline: September 2026.
 
+Related prototype hardware note: [AFE Characterisation Board](AFE%20Characterisation%20Board.md)
+
 ---
 
 ## System Architecture

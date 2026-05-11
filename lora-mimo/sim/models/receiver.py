@@ -97,7 +97,7 @@ def estimate_channel(rx_preamble: np.ndarray, M: int, N_sym: int,
     Algorithm (gr-lora_sdr style)
     ------------------------------
     1. Estimate fractional CFO via RCTSL (Cui Yang et al.) unless eps_sub is
-       supplied by the caller (e.g. from SchmidlCoxDetector).
+       supplied by the caller from an external estimator.
     2. Apply time-domain CFO correction: rx_corr[n] = rx[n] · exp(−j2π·ε·n/M).
     3. Incoherent peak search: sum |FFT(dechirp(rx_corr_j,s))| across all
        antennas j and symbols s → integer peak bin k_peak.

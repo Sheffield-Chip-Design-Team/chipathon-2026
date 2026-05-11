@@ -34,6 +34,7 @@ Deliverables:
 - `sc_lock`, `timing_ref`, and energy snapshot behavior
 - threshold and hit-count verification
 - Python reference model for SC and energy estimation
+- correlation against live hardware captured from the [AFE Characterisation Board](AFE%20Characterisation%20Board.md)
 
 ## 2. Preamble FFT / Channel Estimation
 
@@ -276,4 +277,3 @@ Deliverables:
 ## Assignment Rule
 
 For each workstream, assign one owner who is accountable for the block/spec closure and one reviewer who is accountable for cross-checking interfaces with adjacent workstreams.
-

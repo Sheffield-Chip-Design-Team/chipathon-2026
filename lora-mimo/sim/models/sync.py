@@ -1,121 +1,201 @@
+from dataclasses import dataclass
+
 import numpy as np
-from .fixed import quantize
+
+
+@dataclass
+class SchmidlCoxResult:
+    """Trigger-stage Schmidl-Cox detection result."""
+
+    lock: bool
+    timing_ref: int
+    lock_sample: int
+    first_hit_candidate: int
+    peak_index: int
+    peak_metric: float
+    phase_diag: float
+    metric: np.ndarray
+    hit_mask: np.ndarray
+
 
 class SchmidlCoxDetector:
     """
-    Stage 3 — Schmidl-Cox Preamble Detector.
-    
-    Sliding-window autocorrelation across adjacent dechirped symbols.
+    Stage 3 — Schmidl-Cox preamble trigger.
+
+    The detector continuously dechirps the input, forms the planned
+    magnitude-squared Schmidl-Cox statistic, and asserts `sc_lock` once
+    `hits_req` consecutive symbol-pair checks pass threshold. The reported
+    `timing_ref` is back-calculated to the candidate preamble start; SC phase
+    is retained only as a diagnostic.
     """
-    def __init__(self, M: int, threshold: float = 0.9):
+    def __init__(
+        self,
+        M: int,
+        threshold: float = 0.9,
+        hits_req: int = 2,
+        energy_gate: bool = False,
+        energy_threshold: float = 0.0,
+    ):
+        if hits_req < 1:
+            raise ValueError("hits_req must be >= 1")
+
         self.M = M
         self.threshold = threshold
-        
-    def detect(self, rx_signal: np.ndarray):
+        self.hits_req = hits_req
+        self.energy_gate = energy_gate
+        self.energy_threshold = energy_threshold
+
+    def detect(self, rx_signal: np.ndarray) -> SchmidlCoxResult:
         """
         rx_signal: (NR, L) complex array
-        Returns:
-            lock: bool
-            timing_ref: int (index of first symbol start)
-            eps_sub: float (fractional CFO bin offset)
         """
         NR, L = rx_signal.shape
         M = self.M
-        
-        # Dechirp the entire signal
-        dechirped = np.zeros_like(rx_signal)
-        for j in range(NR):
-            n = np.arange(L)
-            dechirped[j] = rx_signal[j] * np.exp(-1j * np.pi * (n % M)**2 / M)
-            
-        sc_metric = np.zeros(L - 2*M)
-        for d in range(L - 2*M):
-            num = 0j
-            den = 0
+
+        max_start = L - 2 * M + 1
+        if max_start <= 0:
+            return SchmidlCoxResult(
+                lock=False,
+                timing_ref=0,
+                lock_sample=0,
+                first_hit_candidate=0,
+                peak_index=0,
+                peak_metric=0.0,
+                phase_diag=0.0,
+                metric=np.zeros(0),
+                hit_mask=np.zeros(0, dtype=bool),
+            )
+
+        n = np.arange(L)
+        downchirp = np.exp(-1j * np.pi * (n % M) ** 2 / M)
+        dechirped = rx_signal * downchirp[np.newaxis, :]
+
+        mag_sc = np.zeros(max_start)
+        energy_ref = np.zeros(max_start)
+        phase_diag_sc = np.zeros(max_start, dtype=complex)
+        hit_mask = np.zeros(max_start, dtype=bool)
+        threshold_sq = self.threshold ** 2
+
+        for d in range(max_start):
+            mag_sc_sum = 0.0
+            energy_ref_sum = 0.0
+            energy_sum = 0.0
+            best_branch_mag = -1.0
+            best_branch_sc = 0j
+
             for j in range(NR):
-                seg1 = dechirped[j, d:d+M]
-                seg2 = dechirped[j, d+M:d+2*M]
-                num += np.sum(seg1 * np.conj(seg2))
-                den += (np.sum(np.abs(seg1)**2) + np.sum(np.abs(seg2)**2)) / 2
-            
-            if den > 0:
-                sc_metric[d] = np.abs(num) / den
-            else:
-                sc_metric[d] = 0
-                
-        # Find peak
-        peak_idx = np.argmax(sc_metric)
-        if sc_metric[peak_idx] >= self.threshold:
-            num = 0j
-            for j in range(NR):
-                seg1 = dechirped[j, peak_idx:peak_idx+M]
-                seg2 = dechirped[j, peak_idx+M:peak_idx+2*M]
-                num += np.sum(seg1 * np.conj(seg2))
-            
-            # eps_sub = ∠SC / -2π
-            # Phase shift over M samples is -2π k_cfo.
-            # So angle(num) = -2π k_cfo mod 2π.
-            # k_cfo mod 1 = -angle(num) / 2π
-            eps_sub = (-np.angle(num) / (2 * np.pi)) % 1
-            return True, peak_idx, eps_sub
-        
-        return False, 0, 0.0
+                seg1 = dechirped[j, d:d + M]
+                seg2 = dechirped[j, d + M:d + 2 * M]
+
+                sc_j = np.sum(seg1 * np.conj(seg2))
+                e1_j = np.sum(np.abs(seg1) ** 2)
+                e2_j = np.sum(np.abs(seg2) ** 2)
+
+                sc_abs_sq = np.abs(sc_j) ** 2
+                mag_sc_sum += sc_abs_sq
+                energy_ref_sum += e1_j * e2_j
+                energy_sum += e1_j + e2_j
+
+                if sc_abs_sq > best_branch_mag:
+                    best_branch_mag = sc_abs_sq
+                    best_branch_sc = sc_j
+
+            mag_sc[d] = mag_sc_sum
+            energy_ref[d] = energy_ref_sum
+            phase_diag_sc[d] = best_branch_sc
+
+            if energy_ref[d] == 0.0:
+                continue
+
+            if self.energy_gate and energy_sum < self.energy_threshold:
+                continue
+
+            hit_mask[d] = mag_sc[d] >= threshold_sq * energy_ref[d]
+
+        metric = np.divide(
+            np.sqrt(mag_sc),
+            np.sqrt(energy_ref),
+            out=np.zeros_like(mag_sc),
+            where=energy_ref > 0.0,
+        )
+
+        peak_index = int(np.argmax(metric))
+        peak_metric = float(metric[peak_index])
+
+        first_hit_candidate = 0
+        lock = False
+        for d in range(max_start):
+            if d + (self.hits_req - 1) * M >= max_start:
+                break
+            if all(hit_mask[d + k * M] for k in range(self.hits_req)):
+                first_hit_candidate = d
+                lock = True
+                break
+
+        if lock:
+            # The first threshold crossing occurs slightly before the true
+            # preamble start because partially overlapping symbol pairs can
+            # still exceed threshold.  Recover a start estimate by finding the
+            # first full-energy point within one symbol after the first hit.
+            search_stop = min(first_hit_candidate + M, max_start)
+            search_energy = energy_ref[first_hit_candidate:search_stop]
+            full_energy = np.max(search_energy)
+            full_energy_idx = np.flatnonzero(search_energy >= 0.999 * full_energy)
+            timing_ref = first_hit_candidate + int(full_energy_idx[0])
+            lock_sample = first_hit_candidate + (self.hits_req + 1) * M - 1
+            phase_diag = float(np.angle(phase_diag_sc[first_hit_candidate]))
+        else:
+            timing_ref = 0
+            lock_sample = 0
+            phase_diag = 0.0
+
+        return SchmidlCoxResult(
+            lock=lock,
+            timing_ref=timing_ref,
+            lock_sample=lock_sample,
+            first_hit_candidate=first_hit_candidate,
+            peak_index=peak_index,
+            peak_metric=peak_metric,
+            phase_diag=phase_diag,
+            metric=metric,
+            hit_mask=hit_mask,
+        )
+
 
 def resolve_sync(rx_preamble: np.ndarray, rx_sfd: np.ndarray, M: int, eps_sub: float):
     """
-    Estimate total CFO and exact timing offset using preamble upchirps and SFD downchirps.
-    
-    rx_preamble: (NR, M) array, aligned to coarse timing_ref
-    rx_sfd: (NR, M) array, aligned to timing_ref + SFD_offset
+    Legacy offline helper for refining timing/CFO from preamble + SFD.
+
+    The live receiver model now estimates `eps_sub` in Stage 4 via RCTSL.
+    This helper remains for analysis notebooks that want to combine an
+    external fractional-CFO estimate with upchirp/downchirp peak matching.
     """
     NR = rx_preamble.shape[0]
-    ref_up = np.exp(-1j * np.pi * np.arange(M)**2 / M)
-    ref_down = np.exp(1j * np.pi * np.arange(M)**2 / M)
-    
-    # 1. Find k_up and k_down (integer peaks)
+    ref_up = np.exp(-1j * np.pi * np.arange(M) ** 2 / M)
+    ref_down = np.exp(1j * np.pi * np.arange(M) ** 2 / M)
+
     mag_up = np.zeros(M)
     for j in range(NR):
         mag_up += np.abs(np.fft.fft(rx_preamble[j] * ref_up))
     k_up = np.argmax(mag_up)
-    
+
     mag_down = np.zeros(M)
     for j in range(NR):
         mag_down += np.abs(np.fft.fft(rx_sfd[j] * ref_down))
     k_down = np.argmax(mag_down)
-    
-    # 2. Estimate integer CFO
-    # 2 * k_cfo = k_up + k_down (mod M)
-    # 2 * (k_int + eps_sub) = k_up + k_down (mod M)
-    # 2 * k_int = (k_up + k_down - 2 * eps_sub) (mod M)
-    
+
     k_sum = (k_up + k_down) % M
-    # Possible values for 2*k_int
-    two_k_int_cand = (k_sum - 2 * eps_sub)
-    
-    # We want k_int to be an integer.
-    # Since k_sum and 2*eps_sub might not perfectly align to an even integer,
-    # we test candidates for k_int.
-    k_int_cand1 = np.round(two_k_int_cand / 2.0) % M
-    k_int_cand2 = (k_int_cand1 + M/2.0) % M # Ambiguity of M/2
-    
-    # We pick the one that best matches the k_up/k_down observations.
-    # Actually, we can just use k_cfo_cand = (k_sum / 2.0) and resolve ambiguity with eps_sub.
-    # Let's use a simpler way:
     k_cfo_coarse = (k_sum / 2.0) % (M / 2.0)
-    # Two candidates for total k_cfo:
     cand1 = k_cfo_coarse
-    cand2 = k_cfo_coarse + M/2.0
-    
-    # Match fractional part with eps_sub
+    cand2 = k_cfo_coarse + M / 2.0
+
     if np.abs((cand1 % 1) - (eps_sub % 1)) < 0.25:
         k_cfo = np.floor(cand1) + eps_sub
     else:
         k_cfo = np.floor(cand2) + eps_sub
-        
-    # 3. Calculate timing offset (relative to coarse ref)
-    # n_off_rel = (k_up - k_cfo) mod M
+
     n_off_rel = (k_up - k_cfo) % M
-    if n_off_rel > M/2:
+    if n_off_rel > M / 2:
         n_off_rel -= M
-        
+
     return k_cfo, n_off_rel

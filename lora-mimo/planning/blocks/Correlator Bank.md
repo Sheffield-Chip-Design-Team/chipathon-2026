@@ -31,10 +31,18 @@ where `D_j[s][n]` is the dechirped input.
 
 To avoid expensive hardware square roots or CORDIC-based phase extraction, the block calculates the magnitude-squared statistic and compares it against a normalized threshold using multiplication (avoiding division).
 
+For multi-antenna operation, the antenna combine after correlation is explicitly **incoherent**:
+
 ```
 Mag_SC = Σ_j |SC_j[s]|²
-Energy_Ref = [ Σ_j √( E_j[s] · E_j[s+1] ) ]²
+Energy_Ref = Σ_j E_j[s] · E_j[s+1]
 ```
+
+This is intentional:
+
+- each antenna performs a true complex Schmidl-Cox correlation locally
+- the detector does **not** assume cross-antenna phase alignment
+- a weak or phase-rotated antenna cannot cancel a strong antenna during the trigger decision
 
 **Lock condition:**
 
@@ -58,6 +66,39 @@ timing_ref = first_hit_candidate_sample
 
 This definition makes the handoff deterministic: downstream capture uses `timing_ref` as the preamble origin, then adds pre/post guard as needed.
 
+### Signal Flow Sketch
+
+The Schmidl-Cox block is best viewed as a dechirped adjacent-window autocorrelator:
+
+```text
+rx_iq
+  -> dechirp with downchirp reference
+  -> split into adjacent M-sample windows
+       win_a = D[d : d+M]
+       win_b = D[d+M : d+2M]
+  -> per-antenna correlation
+       SC_j[d] = Σ_n win_a[n] * conj(win_b[n])
+  -> per-antenna energy
+       E1_j[d] = Σ_n |win_a[n]|^2
+       E2_j[d] = Σ_n |win_b[n]|^2
+  -> combine antennas
+       Mag_SC[d]     = Σ_j |SC_j[d]|^2
+       Energy_Ref[d] = Σ_j E1_j[d] * E2_j[d]
+  -> threshold compare
+       hit[d] = (Mag_SC[d] >= θ_SC^2 * Energy_Ref[d])
+  -> consecutive-hit counter (`SC_HITS_REQ`)
+  -> `sc_lock`
+  -> timing-ref back-calculator
+  -> `timing_ref`
+```
+
+Interpretation:
+
+- It is an autocorrelation-style detector because it compares one dechirped symbol window against the next dechirped symbol window.
+- It is not a single-bin frequency-tuned matched filter, so constant packet CFO mainly rotates the correlation phase instead of collapsing the detection magnitude.
+- Antenna combining is incoherent after the per-antenna correlations, so the trigger remains robust even when branch phases differ.
+- Its role is coarse packet detection and coarse timing. Final `eps_sub` and refined timing come later from the FFT/RCTSL stage.
+
 ---
 
 ## Interface
@@ -75,6 +116,10 @@ This definition makes the handoff deterministic: downstream capture uses `timing
 | `sc_lock` | out | 1 | per packet | Preamble detected; arms the guarded capture-completion FSM |
 | `timing_ref` | out | 32 | per packet | Estimated preamble-start sample index in `iq_valid` units |
 | `sc_stat` | out | 16 | per symbol | Current Λ[s] value (Q4.12 fixed-point) |
+| `sc_hit_dbg` | out | 1 | per symbol | Debug: current threshold-compare result before hit counting |
+| `sc_hit_count_dbg` | out | 2 | per symbol | Debug: current consecutive-hit counter state |
+| `sc_first_hit_dbg` | out | 32 | per packet | Debug: sample-count snapshot at first qualifying hit |
+| `sc_lock_sample_dbg` | out | 32 | per packet | Debug: sample-count snapshot when `sc_lock` asserts |
 
 ---
 
@@ -135,6 +180,31 @@ Even if Schmidl-Cox is implemented as one top-level RTL block, it naturally deco
    - updates `SC_STAT`
    - latches `ENERGY[0..3]` for AGC and diagnostics at lock
 
+### Bring-Up Debug Signals
+
+For FPGA and early AFE bring-up, expose a minimal set of internal observability points even if the full control plane is not ready yet:
+
+- `sc_hit_dbg`
+  Raw threshold-compare result for the current symbol-pair check. Useful to see whether the detector is failing before or after the hit counter.
+- `sc_hit_count_dbg[1:0]`
+  Current consecutive-hit counter state. Useful to distinguish isolated noise hits from true preamble accumulation.
+- `sc_first_hit_dbg[31:0]`
+  Free-running `iq_valid` sample-count snapshot at the first qualifying hit in the eventual lock sequence.
+- `sc_lock_sample_dbg[31:0]`
+  Free-running `iq_valid` sample-count snapshot when `sc_lock` asserts.
+
+These are intended as debug-only exports:
+
+- route to FPGA ILA / SignalTap probes during bring-up
+- optionally mirror into SPI-readable status registers
+- keep them out of the packet-critical data path
+
+Recommended usage:
+
+- If `SC_STAT` looks healthy but `sc_hit_dbg` never asserts, threshold scaling is likely wrong.
+- If `sc_hit_dbg` pulses but `sc_hit_count_dbg` never reaches `SC_HITS_REQ`, noise or timing jitter is likely dominating.
+- If `sc_lock` asserts but FFT alignment looks wrong, compare `sc_first_hit_dbg`, `sc_lock_sample_dbg`, and `timing_ref` to verify the back-calculation.
+
 **Multiplication over Division.** The threshold check is performed using `|SC|² ≥ θ² · E₁E₂`. This avoids the area-intensive hardware divider and CORDIC blocks previously required for phase/frequency extraction.
 
 **Sensitivity controls.** Two runtime knobs control the sensitivity / false-lock tradeoff:
@@ -147,6 +217,14 @@ Recommended operating range:
 - `SC_HITS_REQ = 1`: aggressive weak-signal mode
 - `SC_HITS_REQ = 2`: default
 - `SC_HITS_REQ = 3`: conservative / noisy environment mode
+
+**Preamble length note.** The Schmidl-Cox trigger is not inherently tied to an 8-symbol preamble. It only needs enough repeated upchirps to accumulate the required consecutive hits:
+
+- minimum useful repeated-upchirp span is approximately `SC_HITS_REQ + 1` symbols
+- longer preambles generally make SC lock easier, not harder
+- the current **8-symbol assumption belongs to Stage 4 FFT acquisition**, which consumes a canonical 8-symbol slice starting at `timing_ref`
+
+So for packets with more than 8 preamble symbols, SC may lock early and the downstream FFT still reads the chosen 8-symbol acquisition window beginning at `timing_ref`.
 
 **Low-Power Design.** Since this block is "always-on," it is heavily clock-gated by `iq_valid`. The complex multipliers used for dechirping and correlation are shared or time-multiplexed across antennas where possible.
 

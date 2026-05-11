@@ -68,6 +68,15 @@ This event must not wait for diagnostic post-guard capture.
 
 **Safe switching.** `W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` update only when `safe_switch=1`. Under the no-mid-packet-switching policy, that means packet idle between packets. If `W_commit` arrives while a packet is active, the current packet remains in bypass and the commit is deferred to the next idle boundary.
 
+**Weight timing policy.** The current FSM behavior corresponds to **next-packet weight application** by default:
+
+- packet `N` preamble triggers SC/FFT estimation
+- PicoRV32 computes `W` for packet `N`
+- if `W_commit` arrives after packet `N` is already active, packet `N` stays in bypass
+- the committed weights become active at the next idle boundary and therefore apply starting with packet `N+1`
+
+This keeps the live path simple and glitch-free, but it assumes the channel estimate remains useful across packet boundaries. A future same-packet mode would require an additional delayed payload path or a separately verified mid-packet safe-switch mechanism.
+
 **Bypass fallback.** Before `W_valid_set`, or if `W_missed_packet=1`, the combiner source remains bypass:
 
 ```

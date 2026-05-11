@@ -181,6 +181,26 @@ required_cycles  = FFT tail/writeback + PicoRV32 W calculation + W_SHADOW writes
 
 The implementation goal is for `h_ready -> W_COMMIT` to complete before the current packet ends. The fail-safe behavior is bypass for the current packet, never a mid-packet W update.
 
+**Weight-application policy note.**
+
+There are two architectural choices for applying the weights estimated from a packet preamble:
+
+1. **Same-packet application**
+   - estimate `H/N0/eps_sub` from the current packet preamble
+   - compute `W`
+   - apply `W` to a delayed or buffered version of the same packet payload
+   - requires additional live-path buffering or an explicitly supported mid-packet safe-switch policy
+
+2. **Next-packet application**
+   - estimate `H/N0/eps_sub` from packet `N`
+   - apply the resulting `W` beginning with packet `N+1`
+   - avoids payload-delay buffering and keeps the live path simple
+   - risks stale weights if the channel changes between packets
+
+**Current architecture choice:** default to **next-packet application**. The no-mid-packet-switching Packet Control FSM already matches this policy: if `W_COMMIT` arrives while a packet is active, the current packet stays in bypass and the committed `W` is activated only at the next idle boundary.
+
+**Future option:** same-packet application may be revisited if FPGA experiments show that a practical FIFO / SRAM delay can cover the `sc_lock -> h_ready -> W_COMMIT` latency at the supported SF range.
+
 > **Known limitation — MRC degradation at low SNR.**
 > MRC combining quality is bounded by channel estimation quality. At low SNR (observed in simulation at −5 dB per-antenna SNR with SF7), 8-symbol FFT averaging produces a noisy `H` estimate. Imperfect phase corrections can cause antenna streams to add partially destructively, making estimated MRC *worse* than the best single antenna. Ideal MRC (using true H) always equals or exceeds the best single antenna — the gap is the estimation loss.
 >

@@ -19,9 +19,9 @@ Run with:  python3 -m sim.tests.test_correlator
 """
 
 import numpy as np
-from .lora     import upchirp, modulate
-from .channel  import apply_channel
-from .receiver import estimate_channel
+
+from ..models.lora import modulate, upchirp
+from ..models.receiver import estimate_channel
 
 SF        = 7
 M         = 2 ** SF          # 128 chips per symbol
