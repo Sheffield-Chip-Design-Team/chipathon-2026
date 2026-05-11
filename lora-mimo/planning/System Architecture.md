@@ -41,10 +41,10 @@ graph LR
         ANT2([Antenna 2])
         ANT3([Antenna 3])
         ANT4([Antenna 4])
-        FEM1["SE2435L_1\nPA+LNA · TX+RX\nctrl: TX_EN/RX_EN"]
-        FEM2["SE2435L_2\nPA+LNA · TX+RX\nctrl: TX_EN/RX_EN"]
-        FEM3["SE2435L_3\nLNA · RX only\nctrl: RX_EN"]
-        FEM4["SE2435L_4\nLNA · RX only\nctrl: RX_EN"]
+        FEM1["FEM_1 = SE2435L_1\nPA+LNA+T/R switch\nTX+RX path"]
+        FEM2["FEM_2 = SE2435L_2\nPA+LNA+T/R switch\nTX+RX path"]
+        FEM3["FEM_3 = SE2435L_3\nLNA+T/R path\nRX-only branch"]
+        FEM4["FEM_4 = SE2435L_4\nLNA+T/R path\nRX-only branch"]
         SX1["SX1257_1\nRF Front-End\nMixer · VGA · PLL\nΣΔ ADC/DAC\nXTB ← TCXO buf"]
         SX2["SX1257_2\nRF Front-End"]
         SX3["SX1257_3\nRF Front-End"]
@@ -64,7 +64,8 @@ graph LR
 
         subgraph detection["Preamble Detection & Channel Estimation"]
             direction TB
-            SC["Schmidl-Cox Detector\nsliding magnitude autocorr\nsc_lock · timing_ref"]
+            SC["Schmidl-Cox / Correlator\nsliding magnitude autocorr\nsc_lock · timing_ref"]
+            EM["Energy Measurement\nper-antenna energy snapshot\nAGC / diagnostics"]
             PCFSM["Packet Control FSM\npacket phase · safe_switch\nlive_fft_ready · W gating"]
             FFT["FFT Engine\nmulti-lane radix-2\nSF5–SF12 (M=32–4096)\nlive: unpadded 8-symbol RCTSL\n3-pass: eps_sub → k_peak → H"]
         end
@@ -81,24 +82,31 @@ graph LR
             direction TB
             PICO["PicoRV32\nRV32IM\nW matrix computation\nTDD switching\nAGC loop"]
             BSRAM["Baseband SRAM\n544 KB\n0x00000–0x3FFFF FFT staging\n0x40000–0x87FFF sample capture"]
+            IRQC["IRQ Controller\ncorr_lock · h_ready · tx events"]
             SPIS["SPI Slave\nRPi SPI0 CS1\nconfig + FW load"]
             SPIM["SPI Master\n→ SX1257 config\n(shared MOSI/MISO/SCK)"]
             SWDTAP["SWD TAP\nPicoRV32 debug"]
             WB["AHB-Lite Bus"]
             PICO <--> WB
-            WB <--> BSRAM & SPIS & SPIM & SWDTAP
+            WB <--> BSRAM & IRQC & SPIS & SPIM & SWDTAP
         end
 
         D1 & D2 & D3 & D4 --> SC
+        D1 & D2 & D3 & D4 --> EM
         D1 & D2 & D3 & D4 --> COMB
         D1 & D2 & D3 & D4 -->|"raw int8 IQ capture"| BSRAM
         SC -->|"sc_lock · timing_ref"| PCFSM
         SC -->|"sc_lock · timing_ref"| BSRAM
+        EM -->|"energy[0..3] snapshot"| PICO
         PCFSM -->|"live_fft_ready · capture_protect"| BSRAM
         BSRAM -->|"timing_ref\nprotected 8-symbol window"| FFT
         PCFSM -->|"trigger"| FFT
         FFT -->|"H matrix · N₀ · eps_sub\nh_ready"| PICO
         FFT -->|"h_ready"| PCFSM
+        SC -->|"corr_lock"| IRQC
+        FFT -->|"h_ready"| IRQC
+        PCFSM -->|"tx / mode status"| IRQC
+        IRQC -->|"IRQ"| PICO
         PICO -->|"W_SHADOW · W_commit"| PCFSM
         PICO -->|"W matrix\n(int16)"| COMB
         PCFSM -->|"safe_switch · W_valid\nactive mode/antenna"| COMB
@@ -106,6 +114,11 @@ graph LR
 
     CHIP --> chip_internals
 ```
+
+Notes:
+
+- `FEM` = front-end module. Here it means the external `SE2435L` RF front-end on each antenna branch.
+- `Energy Measurement` is shown explicitly because it shares the preamble-detection path but also provides the per-antenna snapshot used by AGC and diagnostics.
 
 ---
 

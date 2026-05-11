@@ -357,6 +357,25 @@ Example policy directions:
 - dense multipath / ill-conditioned `H`: stronger regularization, avoid `ZF`
 - poor `H` confidence at low SNR: consider `SC` or `EGC` instead of `MRC`
 
+### Channel model note
+
+The current simulation baseline has used packet-static Rayleigh fading (`K=0`).
+That is the right stress case for non-LoS multipath, but it is not the only
+deployment condition worth studying.
+
+For weak or strong line-of-sight conditions, the channel model should also be
+swept over packet-static Rician fading with non-zero `K`:
+
+- `K=0`: Rayleigh, no dominant path
+- small positive `K`: weak-LoS / mixed multipath
+- large `K`: strong LoS with reduced deep-fade probability
+
+This does not change the `NT=1` MRC or `NT=2` MMSE math directly; it changes
+the operating distribution of `H`, fade depth, and spatial correlation risk.
+For `NT=2`, stronger LoS can make column correlation more important than in the
+independent-Rayleigh baseline, so detector comparisons should not rely only on
+`K=0` sweeps.
+
 ### Level 2: Small learned classifier
 
 This is worth studying only after the rule-based baseline exists.

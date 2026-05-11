@@ -207,6 +207,8 @@ These checks are intended to de-risk coherent combining before full packet-path 
 
 **Supporting instrument:** Spectrum-analyzer measurements are still useful for absolute RF checks such as leakage, carrier placement, and compression, but the FPGA capture path is the primary method for coherent branch characterization.
 
+**Fixture note:** The common-tone setup should be treated as a configurable RF fixture, not only a one-time bring-up connection. Use a 4-way power splitter to feed all branches from one source, add fixed or stepped attenuators as needed for equal-power, mismatch, and near-far cases, and keep a record of the attenuation placed in each branch. Also include a controlled cable-length experiment: first use equal-length cables as the baseline, then introduce known length differences on selected branches to create deterministic phase shifts at the test frequency. This helps separate stable fixture-induced phase offsets from true SX1257/clock-path mismatch and gives a simple lab check that the estimated `phi_j` tracks expected RF path delay.
+
 **Disposition rule:** A failed AFE characterization result must not stop at "out of spec". Each failure must be classified as `accept`, `calibrate`, `mask/fallback`, or `hardware action`, with the chosen mitigation recorded before moving to full MIMO integration.
 
 ---

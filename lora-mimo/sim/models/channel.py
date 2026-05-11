@@ -1,20 +1,46 @@
-"""Channel models: flat Rayleigh fading + AWGN.
+"""Channel models: flat Rician/Rayleigh fading + AWGN.
 
-Each antenna sees an independent CN(0,1) coefficient, constant over one packet.
-Optional random PLL phase offset (uniform ±π) is folded into the coefficient
-before transmission — the preamble FFT estimator absorbs it automatically.
+Each antenna sees an independent unit-power complex coefficient, constant over
+one packet. `K=0` reduces to Rayleigh fading. Optional random PLL phase offset
+(uniform ±π) is folded into the coefficient before transmission — the preamble
+FFT estimator absorbs it automatically.
 """
 
 import numpy as np
 from scipy.ndimage import shift
 
 
-def rayleigh_coefficients(NR: int, pll_phase_random: bool = True) -> np.ndarray:
-    """Return NR independent unit-power complex fading coefficients."""
-    h = (np.random.randn(NR) + 1j * np.random.randn(NR)) / np.sqrt(2)
+def rician_coefficients(
+    NR: int,
+    K: float = 0.0,
+    pll_phase_random: bool = True,
+) -> np.ndarray:
+    """Return NR independent unit-power complex fading coefficients.
+
+    Parameters
+    ----------
+    NR : int
+        Number of receive branches.
+    K : float
+        Linear Rician K-factor. `K=0` gives Rayleigh fading.
+    pll_phase_random : bool
+        Whether to fold an independent random phase offset into each branch.
+    """
+    if K < 0:
+        raise ValueError("Rician K-factor must be non-negative")
+
+    h_nlos = (np.random.randn(NR) + 1j * np.random.randn(NR)) / np.sqrt(2)
+    h_los = np.ones(NR, dtype=np.complex128)
+    h = np.sqrt(K / (K + 1.0)) * h_los + np.sqrt(1.0 / (K + 1.0)) * h_nlos
+
     if pll_phase_random:
         h = h * np.exp(1j * np.random.uniform(-np.pi, np.pi, NR))
     return h
+
+
+def rayleigh_coefficients(NR: int, pll_phase_random: bool = True) -> np.ndarray:
+    """Return NR independent unit-power Rayleigh fading coefficients."""
+    return rician_coefficients(NR, K=0.0, pll_phase_random=pll_phase_random)
 
 
 def apply_channel(signal: np.ndarray, h: complex, N0: float, 
