@@ -281,6 +281,20 @@ This keeps the project aligned with both goals:
 - remove per-branch DC offset before correlation / combining
 - keep implementation simple: running mean or packet-pretraining average
 
+Why it is included:
+
+- the `SX1257` is a zero-IF / direct-conversion style front-end, so residual baseband DC offset is a realistic impairment
+- DC bias can distort low-SNR repeated-block correlation and training correlation results
+- DC bias can inflate branch power estimates and destabilize coefficient generation
+- the implementation cost is very small compared with the potential loss in estimator quality
+
+This block is therefore intended as a low-cost protection step for:
+
+- burst detection
+- common-CFO estimation
+- per-antenna coefficient estimation
+- stable combining behavior
+
 ### 4. Burst / timing detector
 
 - detect presence of the repeated training block
