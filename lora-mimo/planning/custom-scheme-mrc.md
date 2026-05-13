@@ -580,6 +580,71 @@ For simplicity, all four branches should use the same fixed gain in the first de
 - collect debug metrics
 - compare bypass vs EGC vs MRC
 
+## Weight telemetry to host
+
+After coefficients are generated and applied locally inside the ASIC, they should also be exposed to the Raspberry Pi over the existing host SPI path.
+
+Recommended policy:
+
+- weights are applied locally in the ASIC combiner
+- active weights are mirrored to the host as telemetry
+- host telemetry must not be part of the real-time combining dependency chain
+
+This makes the host path useful for:
+
+- experiment logging
+- plotting coefficient evolution over bursts
+- comparing bypass / EGC / MRC modes
+- debugging calibration behavior
+- validating coefficient generation against the known transmitted training pattern
+
+### Preferred transport
+
+Use the existing ASIC SPI-slave path to the Raspberry Pi.
+
+Recommended behavior:
+
+1. ASIC completes coefficient generation
+2. ASIC latches `W_ACTIVE`
+3. ASIC raises an IRQ or status flag such as `weights_ready`
+4. Raspberry Pi reads a fixed telemetry register block over SPI
+
+This is preferred over streaming weights to the FPGA because:
+
+- weight updates occur only once per burst or packet
+- required bandwidth is very small
+- the Raspberry Pi is the natural place for experiment orchestration and data logging
+- it avoids coupling the RX timing-critical path to the FPGA
+
+### Telemetry contents
+
+The host-readable telemetry block should include:
+
+- active weights `w_j`
+- optional raw correlator outputs `z_j`
+- optional calibrated branch estimates `h_j`
+- common CFO estimate
+- confidence / lock metric
+- active combining mode
+- optional smoothing / tracking state indicators
+
+### Design rule
+
+Do not make host telemetry part of the coefficient-application critical path.
+
+The ASIC must:
+
+- compute and apply weights locally
+- continue receive processing even if the host is late reading telemetry
+
+So the host path is:
+
+- telemetry / observability only
+
+not:
+
+- required acknowledgment for live combining
+
 ## Rough area outlook
 
 The original full LoRa-compatible architecture was dominated by large SRAM blocks and was estimated at several `mm^2`.
