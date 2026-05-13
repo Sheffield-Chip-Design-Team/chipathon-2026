@@ -387,6 +387,159 @@ Payload options:
 
 The demonstrator should focus on showing combining gain, not building a complex payload decoder.
 
+## DSP RTL partition
+
+For the custom scheme, the DSP should be partitioned around streaming correlator roles rather than around the old LoRa-specific FFT acquisition flow.
+
+The key simplification is:
+
+- do not think in terms of one generic correlator bank
+- instead use two purpose-built correlators with different jobs
+
+### 1. Front-end sample conditioning
+
+Blocks:
+
+- `ΣΔ Decimator x4`
+- `DC Removal x4`
+- optional clipping / power-monitor hooks
+
+Responsibilities:
+
+- produce clean `int8` complex samples
+- maintain `iq_valid`-driven downstream timing
+- remove low-cost impairments before correlation
+
+### 2. Repeated-block correlator
+
+Purpose:
+
+- burst detection
+- repeated-block confidence metric
+- common-CFO estimation support
+
+Per antenna:
+
+`c_j = sum_n r_j[n+L] conj(r_j[n])`
+
+`e1_j = sum_n |r_j[n]|^2`
+
+`e2_j = sum_n |r_j[n+L]|^2`
+
+Recommended combine rules:
+
+- detect on `sum_j |c_j|^2`
+- estimate CFO from `C_pool = sum_j c_j`
+
+Responsibilities:
+
+- threshold compare
+- hit / lock FSM
+- block-start timing
+- export pooled repeated-block statistic
+
+This block replaces the LoRa-specific Schmidl-Cox trigger logic in the custom demonstrator path.
+
+### 3. Common-CFO estimator / derotator
+
+Purpose:
+
+- estimate one common CFO shared by all four branches
+- derotate all branches before coefficient estimation
+
+Suggested flow:
+
+- compute `omega_hat` from the pooled repeated-block correlation
+- drive a shared NCO / phase accumulator
+- apply complex rotation to all four branches
+
+Responsibilities:
+
+- phase-estimate handoff
+- phase accumulation
+- shared derotation control
+
+### 4. Known-training correlator
+
+Purpose:
+
+- estimate per-antenna branch coefficients after CFO correction
+
+Per antenna:
+
+`z_j = sum_n r_corr,j[n] conj(s[n])`
+
+Outputs:
+
+- `z_0..z_3`
+- branch confidence / power metrics
+
+Responsibilities:
+
+- correlate against the known training block
+- produce coefficient-estimation statistics for firmware
+- avoid waveform buffering by streaming accumulation only
+
+### 5. Calibration / coefficient handoff
+
+For the first demonstrator, this should be kept thin in RTL.
+
+Recommended role:
+
+- registerize `z_j`
+- expose branch power / confidence
+- pass results to PicoRV32
+- let firmware apply calibration correction and generate weights
+
+### 6. Combiner
+
+Responsibilities:
+
+- bypass mode
+- EGC
+- MRC
+- optional smoothed-MRC mode selection
+
+The existing `NT=1` complex-MAC interpretation still applies, but the control is simplified for the custom demonstrator.
+
+## Recommended DSP work split
+
+One practical work split is:
+
+### Lane A — sample conditioning
+
+- decimator integration
+- DC removal
+- clipping / power monitor hooks
+
+### Lane B — detector and CFO
+
+- repeated-block correlator
+- repeated-block energy support
+- pooled CFO statistic
+- hit / lock FSM
+- block timing
+
+### Lane C — coefficient-estimation path
+
+- CFO-corrected training correlator
+- `z_j` accumulation
+- confidence export
+- register / firmware handoff
+
+### Lane D — combiner path
+
+- weight register bank
+- bypass / EGC / MRC / smoothed-MRC mode select
+- complex MAC datapath
+- output formatting
+
+## Important design decision
+
+The repeated-block correlator and the known-training correlator should be treated as separate blocks with separate owners and verification plans.
+
+This is preferred over trying to force one generic correlator architecture to cover all jobs.
+
 ## Memory strategy
 
 Avoid:
@@ -516,6 +669,90 @@ Not recommended:
 - generic packet parsing
 - large software frameworks
 - large debug logs or formatted print support
+
+## Small interconnect strategy
+
+The current direction is to keep a small structured control-plane interconnect rather than ad hoc point-to-point glue.
+
+Recommended choice:
+
+- a small `AHB-Lite`-inspired interconnect
+- single master
+- multiple simple slaves
+- no use of the bus for sample-rate datapath traffic
+
+### Why keep a small bus
+
+The bus is not being kept because SPI itself requires it.
+
+It is being kept because the project still benefits from a reusable control-plane architecture for:
+
+- `PicoRV32`
+- SRAM macros
+- register bank
+- host SPI interface
+- SPI master for `SX1257`
+- IRQ / status handling
+- SWD / debug integration
+
+This aligns with the foundational-block goal while avoiding a large subsystem architecture.
+
+### What stays off the bus
+
+The streaming DSP path should remain direct-wired RTL, not memory/bus based:
+
+- decimators
+- detector
+- CFO estimator
+- CFO derotator
+- training correlators
+- combiner
+
+These blocks exchange streaming data directly.
+
+### Suggested interconnect shape
+
+Master:
+
+- `PicoRV32` wrapper
+
+Slaves:
+
+- `DMEM SRAM macro 0`
+- `DMEM SRAM macro 1`
+- optional additional SRAM macros if required
+- `register bank / status`
+- `SPI slave peripheral`
+- `SPI master peripheral`
+- `IRQ controller`
+- `SWD / debug peripheral`
+
+### Complexity target
+
+Keep the interconnect deliberately small:
+
+- single master only
+- simple address decode
+- memory-mapped control registers
+- optional wait-state support for SRAM or SPI transactions
+- no attempt to carry the high-rate receive datapath over the bus
+
+### Suggested SRAM mapping
+
+If multiple SRAM macros are used for CPU data memory, expose them as a simple contiguous or near-contiguous CPU-visible address space.
+
+Example concept:
+
+- macro0: `0x0000–0x01FF`
+- macro1: `0x0200–0x03FF`
+- macro2: `0x0400–0x05FF`
+- macro3: `0x0600–0x07FF`
+
+This is only an example map, but the intended principle is:
+
+- keep software simple
+- keep decode simple
+- do not treat SRAM as a shared sample buffer
 
 ## CFO strategy
 
