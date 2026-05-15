@@ -56,12 +56,13 @@ MISO byte 1: register contents (read) or 0x00 (write)
 Rules:
 
 - Every normal register transaction is exactly 2 bytes under one `HOST_CS` assertion.
-- Address `0x7F` is reserved as an extended-command escape and must not be assigned to a normal register.
+- If Byte 0 is anything other than `0x7F`, the slave interprets the transaction as a normal 2-byte register access.
+- Address value `0x7F` is reserved as an extended-command escape and must not be assigned to a normal register.
 - The active register set for tapeout is the non-FFT map in [Register Map Delta - Non-FFT](../Register%20Map%20Delta%20-%20Non-FFT.md).
 
 ### Extended command escape
 
-If Byte 0 is `0x7F`, the SPI slave enters extended-command mode instead of normal register mode:
+If Byte 0 is `0x7F`, the SPI slave does **not** treat it as a register address. Instead, `0x7F` is the command escape byte that tells the parser to enter extended-command mode:
 
 ```
 Byte 0: 0x7F                // escape
@@ -70,6 +71,13 @@ Byte 2: addr_hi[3:0]        // CPU SRAM byte address [11:8] in low nibble; high 
 Byte 3: addr_lo[7:0]        // CPU SRAM byte address [7:0]
 Byte 4: len_minus_1         // transfer length = 1..256 bytes
 Byte 5...: payload or dummy bytes depending on opcode
+```
+
+Parser rule:
+
+```text
+Byte 0 != 0x7F  -> normal 2-byte register transaction
+Byte 0 == 0x7F  -> extended-command transaction
 ```
 
 `HOST_CS` must remain asserted for the entire extended command. If `HOST_CS` deasserts before the declared payload length completes, the command is aborted and any partial final byte is discarded.
@@ -114,12 +122,60 @@ Semantics:
 
 ### Boot sequence
 
+`CPU_RESET` is a normal register write to address `0x02`, not an extended command.
+
+Examples:
+
+```text
+Assert CPU reset:   0x82 0x01   // write register 0x02 = 0x01
+Release CPU reset:  0x82 0x00   // write register 0x02 = 0x00
+```
+
 ```
 1. Host writes CPU_RESET = 1 via register 0x02
 2. Host issues one or more extended opcode 0x01 firmware-load writes starting at address 0x000
 3. Host optionally verifies contents with extended opcode 0x02
 4. Host writes CPU_RESET = 0 via register 0x02
 5. PicoRV32 fetches from 0x00000
+```
+
+### Mermaid transaction flow
+
+```mermaid
+sequenceDiagram
+    participant H as Host RPi
+    participant S as ASIC SPI Slave
+    participant M as CPU SRAM Load Port
+
+    H->>S: Normal write: 0x82 0x01
+    Note over H,S: CPU_RESET = 1
+
+    H->>S: CS low, Byte0=0x7F
+    H->>S: Byte1=0x01 (fw write)
+    H->>S: Byte2=addr_hi
+    H->>S: Byte3=addr_lo
+    H->>S: Byte4=len-1
+    loop payload bytes
+        H->>S: data byte
+        S->>M: fw_ld_addr, fw_ld_wdata, fw_ld_we
+    end
+    H->>S: CS high
+
+    opt optional readback
+        H->>S: CS low, Byte0=0x7F
+        H->>S: Byte1=0x02 (fw readback)
+        H->>S: Byte2=addr_hi
+        H->>S: Byte3=addr_lo
+        H->>S: Byte4=len-1
+        loop dummy bytes
+            H->>S: dummy byte
+            S-->>H: CPU SRAM data byte
+        end
+        H->>S: CS high
+    end
+
+    H->>S: Normal write: 0x82 0x00
+    Note over H,S: CPU_RESET = 0
 ```
 
 ---
@@ -164,65 +220,3 @@ Semantics:
 - [Register Map](../Register%20Map.md) — legacy base map; superseded where the non-FFT delta differs
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — unified 4 kB CPU SRAM target for firmware load; `CPU_RESET` register
 - [AHB-Lite Bus](AHB-Lite%20Bus.md) — internal bus for register access
-
----
-
-## Packet diagrams
-
-### Monospace bitfield view
-
-```text
-Normal register access
-Byte 0: [7] R/W  [6:0] REG_ADDR
-Byte 1: [7:0] DATA / DUMMY
-
-Extended command
-Byte 0: 0x7F
-Byte 1: OPCODE
-Byte 2: ADDR_HI[3:0]
-Byte 3: ADDR_LO[7:0]
-Byte 4: LEN_MINUS_1
-Byte 5+: PAYLOAD or DUMMY
-```
-
-### Mermaid field layout
-
-```mermaid
-flowchart TD
-    A["SPI Slave Register Packet"] --> B["Byte 0"]
-    B --> C["bit7: R/W"]
-    B --> D["bits6:0: REG_ADDR"]
-    A --> E["Byte 1"]
-    E --> F["write: DATA[7:0]"]
-    E --> G["read: dummy on MOSI, REG_RDATA[7:0] on MISO"]
-```
-
-```mermaid
-flowchart TD
-    A["SPI Slave Extended Packet"] --> B["Byte 0: 0x7F escape"]
-    B --> C["Byte 1: OPCODE"]
-    C --> D["Byte 2: ADDR_HI[3:0]"]
-    D --> E["Byte 3: ADDR_LO[7:0]"]
-    E --> F["Byte 4: LEN_MINUS_1"]
-    F --> G["Byte 5..N: payload or dummy bytes"]
-```
-
-### Mermaid transaction flow
-
-```mermaid
-sequenceDiagram
-    participant H as Host RPi
-    participant S as ASIC SPI Slave
-    participant M as CPU SRAM Load Port
-
-    H->>S: CS low, Byte0=0x7F
-    H->>S: Byte1=0x01 (fw write)
-    H->>S: Byte2=addr_hi
-    H->>S: Byte3=addr_lo
-    H->>S: Byte4=len-1
-    loop payload bytes
-        H->>S: data byte
-        S->>M: fw_ld_addr, fw_ld_wdata, fw_ld_we
-    end
-    H->>S: CS high
-```
