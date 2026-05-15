@@ -2,15 +2,21 @@
 
 Corresponds to planning/blocks/Training Accumulator.md.
 
-Z_j = Σ_n  raw_j[n] · conj(chirp_ref[n mod M])
+Primary path — cross-correlation against nominated reference branch:
 
-where the sum runs from sc_lock_sample to timing_ref + 8·M − 1.
+    Z_j = Σ_n  raw_j[n] · conj(raw_ref[n])
 
-Z_j / n_acc  ≈  h_j · φ_common
+where raw_ref = raw_j[ref_sel] and the sum runs from sc_lock_sample to
+timing_ref + 8·M − 1.
 
-where φ_common is a common CFO phase factor that cancels in all weight
-computation modes (MRC, EGC, SC) because it appears identically in every
-branch. No CFO correction is needed before weight computation.
+Z_j / n_acc  ≈  h_j · conj(h_ref)
+
+The common CFO exp(j·ω·n) cancels exactly in the cross-product because
+|s[n]|² = 1 for a constant-amplitude LoRa upchirp. This holds at all CFO
+values — no Dirichlet attenuation, no integer-bin nulls.
+
+MRC combining using w_j = conj(Z_j) gives y[n] = h_ref · Σ|h_j|² · s[n],
+i.e. full MRC gain with h_ref as a common phase rotation (handled by SX1302).
 """
 
 import numpy as np
@@ -22,8 +28,8 @@ def chirp_reference(M: int) -> np.ndarray:
 
     chirp_ref[n] = exp(j·π·n²/M)   for n = 0, …, M−1
 
-    The training accumulator multiplies each sample by conj(chirp_ref[n mod M]).
-    At SF6 (M=64) this is a 64-entry LUT — 256 bytes in hardware.
+    Retained for diagnostic use and the alternative chirp-ref path.
+    Not used in the primary cross-correlation accumulation path.
     """
     n = np.arange(M)
     return np.exp(1j * np.pi * n ** 2 / M)
@@ -34,16 +40,17 @@ def training_accumulate(
     sc_lock_sample: int,
     timing_ref: int,
     M: int,
+    ref_sel: int = 0,
 ) -> tuple[np.ndarray, int]:
     """
-    Accumulate dechirped preamble samples to estimate per-branch channel.
+    Cross-correlate preamble samples against reference branch to estimate
+    per-branch relative channel coefficients.
 
     Parameters
     ----------
     raw_j : (NR, N_samples) complex array
-        Full-precision decimator output samples. Sample index 0 = start of
-        the simulation frame. Must be full-precision (NOT 8-bit saturated
-        SRAM samples — see Frontend Buffer Controller spec).
+        Full-precision decimator output samples. Must NOT be 8-bit saturated
+        (see Frontend Buffer Controller spec).
     sc_lock_sample : int
         Sample index at which sc_lock asserted. Accumulation starts here.
     timing_ref : int
@@ -51,11 +58,15 @@ def training_accumulate(
         Accumulation ends at timing_ref + 8·M − 1.
     M : int
         Samples per symbol (2^SF).
+    ref_sel : int
+        Reference branch index (0–3). Controlled by TACC_REF_SEL register.
+        Default 0. The best-known antenna for the deployment should be used.
 
     Returns
     -------
     Z_j : (NR,) complex
-        Raw accumulator output. Z_j / n_acc ≈ h_j · φ_common.
+        Cross-correlation output. Z_j / n_acc ≈ h_j · conj(h_ref).
+        For j == ref_sel: Z_j is real (auto-correlation = branch energy).
     n_acc : int
         Number of samples accumulated.
 
@@ -66,19 +77,18 @@ def training_accumulate(
     (n_acc ≈ 320). This gives a ~2 dB SNR penalty vs ideal; see spec.
     """
     NR, N_samples = raw_j.shape
-    lut = chirp_reference(M)
 
     acc_start = sc_lock_sample
-    acc_end   = timing_ref + 8 * M - 1
-    acc_end   = min(acc_end, N_samples - 1)
+    acc_end   = min(timing_ref + 8 * M - 1, N_samples - 1)
 
     if acc_start > acc_end:
         return np.zeros(NR, dtype=complex), 0
 
-    indices      = np.arange(acc_start, acc_end + 1)
-    phase_idx    = indices % M
-    conj_ref     = np.conj(lut[phase_idx])                     # (n_acc,)
-    Z_j          = raw_j[:, acc_start:acc_end + 1] @ conj_ref  # (NR,)
+    window     = raw_j[:, acc_start:acc_end + 1]   # (NR, n_acc)
+    ref_window = raw_j[ref_sel, acc_start:acc_end + 1]  # (n_acc,)
+
+    # Z_j = Σ_n raw_j[n] · conj(raw_ref[n])
+    Z_j = window @ np.conj(ref_window)              # (NR,)
 
     n_acc = acc_end - acc_start + 1
     return Z_j, n_acc
@@ -91,10 +101,9 @@ def apply_calibration(
     """
     Apply per-branch static gain/phase calibration.
 
-    H_j_cal = H_j * conj(cal_j)
+    H_j_cal = Z_j * conj(cal_j)
 
-    cal_j : (NR,) complex calibration coefficients, Q1.15 (default 1+0j).
-    If None, calibration is bypassed (H_j_cal = Z_j).
+    cal_j : (NR,) complex calibration coefficients (default 1+0j = bypass).
     """
     if cal_j is None:
         return Z_j.copy()
@@ -112,7 +121,7 @@ def compute_weights(
 
     Parameters
     ----------
-    Z_j       : (NR,) complex channel estimates from training_accumulate()
+    Z_j       : (NR,) complex cross-correlation estimates from training_accumulate()
     mode      : 'mrc' | 'egc' | 'sc' | 'bypass'
     antenna_en: bitmask of enabled antennas (bit 0 = antenna 0)
     cal_j     : (NR,) complex calibration coefficients, or None
@@ -123,9 +132,9 @@ def compute_weights(
 
     Notes
     -----
-    Division by n_acc is skipped — it is a common scalar across all branches
-    and cancels in the weight ratios. Similarly, the common CFO phase factor
-    φ_common cancels in all modes. See planning/blocks/Weight Generation.md.
+    Z_j ≈ h_j · conj(h_ref) · n_acc.  Division by n_acc cancels in all
+    weight ratios.  The common h_ref factor also cancels: conj(Z_j) =
+    conj(h_j) · h_ref, and h_ref is a common scalar across all branches.
     """
     from .fixed import quantize_q1_15
 
@@ -171,11 +180,11 @@ def cfo_diagnostic(Z_j: np.ndarray) -> float:
     """
     Pooled CFO diagnostic from training accumulator output.
 
-    C_pool = Σ_j Z_j   (coherent sum across branches)
-    cfo_diag = -angle(C_pool) / M   [rad/sample]
-
-    This is a coarse CFO estimate for diagnostic readback only.
-    It is NOT used in the weight computation path — see spec.
+    Not used in the weight computation path — diagnostic readback only.
+    Note: with the cross-correlation scheme, Z_j = h_j·conj(h_ref) so
+    angle(C_pool) reflects the spread of h_j phases, not CFO directly.
+    This function is retained for compatibility but its interpretation
+    changes with the cross-correlation scheme.
     """
     C_pool = np.sum(Z_j)
     return -float(np.angle(C_pool))

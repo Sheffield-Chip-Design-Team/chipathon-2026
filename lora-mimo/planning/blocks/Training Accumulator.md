@@ -9,49 +9,67 @@ RX path block (non-FFT frontend). See [Non-FFT LoRa Frontend Proposal](../Non-FF
 
 ## Role
 
-Estimates one complex channel coefficient per receive branch by accumulating dechirped preamble samples. The output `Z_j` feeds weight generation directly — no FFT, no separate training field, no SRAM access required.
+Estimates one complex channel coefficient per receive branch by cross-correlating preamble samples against a nominated reference antenna. The output `Z_j` feeds weight generation directly — no FFT, no chirp LUT, no SRAM access required.
 
-The LoRa preamble upchirps are used as the training sequence. They are a known constant-amplitude waveform and serve as a pilot for channel estimation.
+The LoRa preamble upchirps are used as the training sequence. Their constant amplitude means CFO cancels exactly in the cross-product.
 
 ---
 
 ## How it works
 
-After dechirping branch `j` with the conjugate LoRa upchirp reference:
+During the preamble, branch `j` receives:
 
 ```
-d_j[n] = raw_j[n] · conj(chirp_ref[n mod M])
+rx_j[n] = h_j · s[n] + noise_j
 ```
 
-The received signal during the preamble is:
+where `s[n] = upchirp[n mod M] · exp(j·ω·n)` is the CFO-shifted upchirp and `ω` is the common CFO across all branches.
+
+Cross-correlating branch `j` against the nominated reference branch `r`:
 
 ```
-d_j[n] = h_j · exp(j·ω·n) + noise
+Z_j = Σ_n rx_j[n] · conj(rx_r[n])
+    ≈ h_j · conj(h_r) · N_acc · Σ|s[n]|² / N_acc  +  noise
+    = h_j · conj(h_r) · N_acc  +  noise
 ```
 
-where `h_j` is the complex channel coefficient and `ω` is the common CFO across all branches.
+Because `|s[n]|² = 1` (constant-amplitude chirp), the CFO term `exp(j·ω·n)` cancels exactly in the product — **no CFO correction is needed at any CFO value**, including the ±8.9-bin worst case at ±20 ppm / 868 MHz / SF6.
 
-Accumulating over the available preamble window:
+### MRC combining from cross-correlation estimates
 
-```
-Z_j = Σ_n d_j[n]  ≈  h_j · N_acc + noise_sum
-```
-
-where `N_acc` is the number of samples accumulated.
-
-### Why CFO does not need to be corrected
-
-The CFO term `exp(j·ω·n)` is identical across all branches. It appears as a common phase factor in every `Z_j`:
+Setting `w_j = conj(Z_j)` and combining:
 
 ```
-Z_j ≈ h_j · φ_common
+y[n] = Σ_j conj(Z_j) · rx_j[n]
+     = h_r · Σ_j |h_j|² · s[n]  +  noise
 ```
 
-When forming MRC or EGC weights from `Z_j`, `φ_common` cancels in the ratios. The combining weights are correctly directed regardless of CFO. Residual CFO in the combined output is handled by the SX1302 downstream.
+The combining gain is `Σ_j |h_j|²` — full MRC gain. The `h_r` phase factor is a common rotation that the SX1302 handles downstream.
 
-### Why per-symbol accumulation is not needed
+### Why the chirp-ref approach has a CFO nulling problem
 
-Per-symbol accumulation was considered to enable post-lock inter-symbol CFO correction. Since CFO correction is unnecessary (see above), a single running accumulator per branch is sufficient. This reduces hardware to 4 complex registers.
+The previous chirp-ref approach (`Z_j = Σ rx_j[n] · conj(chirp_ref[n mod M])`) produces a Dirichlet-kernel attenuation proportional to `|sin(π·ε·N_acc/M)| / |sin(π·ε/M)|`. At integer-bin CFO with `N_acc = k·M`, this collapses to zero. At SF6/125 kHz, the first null occurs at just 390 Hz (0.45 ppm). The cross-correlation approach has no such nulls.
+
+---
+
+## Reference branch selection
+
+The reference branch is selected by the 2-bit register field `TACC_REF_SEL[1:0]`:
+
+| `TACC_REF_SEL` | Reference branch |
+|---|---|
+| `00` | Branch 0 (default) |
+| `01` | Branch 1 |
+| `10` | Branch 2 |
+| `11` | Branch 3 |
+
+**Default is branch 0.** This is adequate for most deployments. The register allows the host or PicoRV32 to redirect the reference to a known-good antenna during bring-up, or to work around a hardware fault on branch 0.
+
+The reference branch contributes noise to all other estimates via the cross-product. The strongest branch should be preferred as reference. Automatic reference selection (using per-branch energy) was considered but deferred: it would require running all 4×4 cross-correlators simultaneously to avoid a sequencing conflict with the energy detector window. A static register is the practical baseline.
+
+### Effect of a weak reference
+
+If the reference branch is in a fading null (`|h_r| ≈ 0`), all `Z_j` are noise-dominated and combining weights are poor. In a 4-branch independent Rayleigh channel the probability all branches are simultaneously weak is low, and the default branch 0 reference is adequate for almost all cases. If branch 0 has a persistent fault, `TACC_REF_SEL` redirects without firmware change.
 
 ---
 
@@ -80,27 +98,7 @@ Symbols 0 through `SC_HITS_REQ` (approximately the first 2–3 symbols) have pas
 10 · log10(N_acc / 8M)  ≈  −2 dB   (for SC_HITS_REQ = 2, SF6)
 ```
 
-This is acceptable for the baseline implementation. A future enhancement could arm the accumulator on `sc_first_hit_dbg` (the first SC hit, ~1 symbol earlier) to recover one additional symbol, at the cost of requiring false-alarm handling before `sc_lock` confirms.
-
----
-
-## Dechirp reference
-
-The chirp reference for a LoRa upchirp is:
-
-```
-chirp_ref[n] = exp(j · π · n² / M)   for n = 0, 1, …, M−1
-```
-
-The accumulator multiplies each incoming sample by `conj(chirp_ref[n mod M])`.
-
-At SF6 (M = 64), a 64-entry complex LUT is the practical implementation:
-
-- 64 entries × 2 components × 16-bit (Q1.15) = 256 bytes
-- Phase index = `iq_valid_count mod M`; increments every `iq_valid` strobe
-- LUT is shared with any other block that needs the downchirp reference (e.g. a future timing refiner)
-
-At higher SF, the LUT grows proportionally. SF7 requires 128 entries (512 bytes), SF8 requires 256 entries (1 kB). This is a secondary concern given the SF6 operating constraint.
+This is acceptable for the baseline implementation.
 
 ---
 
@@ -108,16 +106,19 @@ At higher SF, the LUT grows proportionally. SF7 requires 128 entries (512 bytes)
 
 Input samples are full-precision from the decimator (**not** the 8-bit saturated SRAM samples). Sample width is 12 or 16 bits per component (TBD).
 
+The cross-product `rx_j[n] · conj(rx_r[n])` produces:
+
 | Quantity | 12-bit input | 16-bit input | Type |
 |---|---|---|---|
 | Sample I or Q | ±2047 | ±32767 | int12 / int16 |
-| chirp_ref component (Q1.15) | — | ±32767 | int16 |
-| Dechirp product component | ±2 × 2047² ≈ 8.4M | ±2 × 32767² ≈ 2.1G | int32 / int64 |
+| Cross-product component | ±2 × 2047² ≈ 8.4M | ±2 × 32767² ≈ 2.1G | int32 / int64 |
 | Z_j component (sum over ~320) | ≈ ±2.7G | ≈ ±670G | int32 (tight) / int64 |
 
-**Use int64 per accumulator component.** At 12-bit input the sum fits in int32 (max ~2.7×10⁹ < 2.1×10⁹ — actually tight, borderline). At 16-bit input int32 overflows. int64 covers both cases safely.
+**Use int64 per accumulator component.** int64 covers both 12-bit and 16-bit inputs safely. At 12-bit the sum is borderline for int32; at 16-bit int32 overflows.
 
 Total register cost: 4 branches × 2 components (I, Q) × 64 bits = **64 bytes**.
+
+The reference branch samples `rx_r[n]` must be buffered for one clock cycle so all four cross-multipliers read the same sample. A single 2×W-bit register per component suffices.
 
 ---
 
@@ -132,7 +133,8 @@ Total register cost: 4 branches × 2 components (I, Q) × 64 bits = **64 bytes**
 | `sc_lock` | in | 1 | per packet | Arms the accumulator |
 | `timing_ref` | in | 32 | per packet | Preamble-start sample index; defines acc_end |
 | `sf` | in | 3 | static | Spreading factor; sets M = 2^SF |
-| `Z_j[3:0]` | out | 4×2×64 | per packet | Complex channel estimates (I+Q, int64 per branch) |
+| `ref_sel` | in | 2 | static | Reference branch index from `TACC_REF_SEL` register |
+| `Z_j[3:0]` | out | 4×2×64 | per packet | Complex cross-correlation estimates (I+Q, int64 per branch) |
 | `training_done` | out | 1 | per packet | Asserts when accumulation is complete; triggers weight gen |
 | `n_acc` | out | 10 | per packet | Number of samples accumulated (for weight gen normalisation) |
 
@@ -140,15 +142,14 @@ Total register cost: 4 branches × 2 components (I, Q) × 64 bits = **64 bytes**
 
 ## Sub-blocks
 
-1. **Chirp reference LUT**
-   - 64-entry complex LUT (SF6)
-   - Phase index driven by `iq_valid_count mod M`
-   - Resets phase index on `sc_lock` to align with `timing_ref` phase
+1. **Reference branch mux**
+   - Selects `rx_r[n]` from `raw_j[ref_sel]`
+   - Output registered to align timing with other branches
 
-2. **Complex multiplier**
-   - `d_j[n] = raw_j[n] · conj(chirp_ref[phase_idx])` per branch
-   - Time-multiplexed across 4 branches or 4 parallel instances
-   - Operates on full-precision input samples
+2. **Complex cross-multiplier array**
+   - `d_j[n] = raw_j[n] · conj(rx_r[n])` per branch (4 parallel instances)
+   - For `j == ref_sel`: `d_j = |rx_r[n]|²` (real — auto-correlation of reference)
+   - Operates on full-precision input samples; no LUT required
 
 3. **Accumulator array**
    - 4 × complex int64 registers (`Z_j[0..3]`)
@@ -168,10 +169,10 @@ Total register cost: 4 branches × 2 components (I, Q) × 64 bits = **64 bytes**
 1. sc_lock asserts at sample N_lock.
 2. acc_start = N_lock. acc_end = timing_ref + 8M - 1.
 3. Accumulator resets: Z_j[0..3] = 0.
-4. LUT phase index aligns to (N_lock mod M).
-5. Each iq_valid: d_j = raw_j · conj(LUT[phase]); Z_j += d_j; phase++.
+4. Reference branch latched from raw_j[ref_sel].
+5. Each iq_valid: d_j = raw_j[j] · conj(rx_r); Z_j += d_j.
 6. At sample acc_end: training_done asserts. Z_j and n_acc are latched.
-7. Weight gen reads Z_j[0..3] and computes W.
+7. Weight gen reads Z_j[0..3] and computes W = conj(Z_j) / S.
 8. Accumulator idles until next sc_lock.
 ```
 
@@ -181,20 +182,39 @@ Total register cost: 4 branches × 2 components (I, Q) × 64 bits = **64 bytes**
 
 | Test | Method | Pass criterion |
 |---|---|---|
-| Noiseless single-path | Known h_j, no noise, SF6 | `Z_j / n_acc` matches `h_j` within rounding |
-| CFO immunity | Inject ε = ±10 kHz; compute weights from Z_j | Weights correctly phase-aligned to h_j; combining gain unaffected |
-| Accumulation window | Check sample count in Z_j | `n_acc ≈ (8 - SC_HITS_REQ - 1) · M` |
+| Noiseless single-path | Known h_j, no noise, SF6 | `Z_j / n_acc` matches `h_j · conj(h_ref)` within rounding |
+| CFO immunity — small | Inject ε = ±0.3 bins | Weight magnitudes identical to zero-CFO case |
+| CFO immunity — large | Inject ε = ±8.9 bins (±20 ppm / SF6) | Weight magnitudes identical to zero-CFO case; no Dirichlet attenuation |
+| CFO immunity — integer bin | Inject ε = ±1, ±2, … bins | No combining gain collapse; Z_j magnitude unaffected |
+| Accumulation window | Check sample count | `n_acc ≈ (8 - SC_HITS_REQ - 1) · M` |
 | Overflow check | Max-amplitude 16-bit input | No int64 overflow after n_acc samples |
-| Multi-branch | NR=4, independent h_j per branch | Each Z_j independently estimates correct h_j |
-| LUT phase alignment | Verify phase resets correctly at sc_lock | Z_j phase error < 1 LSB vs reference accumulation |
+| Multi-branch | NR=4, independent h_j per branch | Z_j = h_j · conj(h_ref) · n_acc for each j |
+| Ref branch selection | Set ref_sel = 1, 2, 3 | Correct branch used as reference; other estimates rotate accordingly |
+| Weak reference | h_ref ≈ 0 (deep null) | Z_j near zero; weight gen falls back gracefully (SC selects best remaining) |
 
 ---
 
 ## Known Limitations
 
 - **Early preamble symbols missed.** Approximately `(SC_HITS_REQ + 1)` preamble symbols are not accumulated. Training SNR is reduced by ~2 dB vs ideal (5 of 8 symbols with `SC_HITS_REQ = 2`).
-- **SF6 only under 1 kB SRAM constraint.** The chirp reference LUT and accumulator register cost scale with M. SF7 and above require larger LUTs.
+- **Relative estimates only.** `Z_j` estimates `h_j · conj(h_ref)`, not `h_j` independently. Per-branch absolute channel magnitude is not available; telemetry exports relative magnitudes. This is sufficient for MRC/EGC/SC combining.
+- **Weak reference degrades all estimates.** If `h_ref ≈ 0`, all `Z_j` are noise-dominated. Mitigated by static `TACC_REF_SEL` pointing to the best-known antenna for the deployment.
+- **SF6 only under 1 kB SRAM constraint.** Accumulator register cost scales with NR only (not M), but the Frontend Buffer SRAM constraint limits operation to SF6.
 - **Sample width TBD.** int64 accumulators handle both 12-bit and 16-bit inputs. Once sample width is confirmed, the accumulator may be reducible to int32 (12-bit path only).
+
+---
+
+## Alternative: chirp-reference accumulation
+
+The original design correlated against an internally generated chirp LUT:
+
+```
+Z_j = Σ raw_j[n] · conj(chirp_ref[n mod M])
+```
+
+This gives absolute `h_j` estimates but is susceptible to Dirichlet-kernel attenuation at large CFO. At ±20 ppm / 868 MHz / SF6 (±8.9 bins), accumulation over 5 complete symbols produces nulls whenever CFO crosses an integer bin boundary. The cross-correlation scheme above was adopted as the primary path because it is CFO-immune with no additional hardware cost (cross-multipliers replace the LUT multiply; the LUT itself is eliminated).
+
+The chirp-ref path remains viable if absolute `h_j` is required for a future feature (e.g. ALMMSE, per-branch telemetry). It can be re-enabled by routing `chirp_ref[n mod M]` into the reference input of the cross-multiplier array in place of `raw_j[ref_sel]`.
 
 ---
 
@@ -204,3 +224,4 @@ Total register cost: 4 branches × 2 components (I, Q) × 64 bits = **64 bytes**
 - [Correlator Bank (SC)](Correlator%20Bank.md) — provides `sc_lock`, `timing_ref`
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — provides `raw_j` and `iq_valid`
 - Weight Generation — consumes `Z_j` and `n_acc`; block spec TBD
+- Register Map — `TACC_REF_SEL[1:0]` field selects reference branch
