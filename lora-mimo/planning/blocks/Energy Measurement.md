@@ -28,8 +28,8 @@ So the architectural role is:
 
 | Port | Direction | Width | Rate | Description |
 | --- | --- | --- | --- | --- |
-| `iq_i[3:0]` | in | 4×8 signed | 1 MS/s | I samples from all 4 decimators |
-| `iq_q[3:0]` | in | 4×8 signed | 1 MS/s | Q samples from all 4 decimators |
+| `iq_i[3:0]` | in | 4×(12–16) signed | 1 MS/s | I samples from all 4 decimators (full precision; width TBD) |
+| `iq_q[3:0]` | in | 4×(12–16) signed | 1 MS/s | Q samples from all 4 decimators |
 | `iq_valid` | in | 1 | 1 MS/s | Sample strobe from decimators |
 | `clk_32m` | in | — | 32 MHz | Master clock |
 | `rst_n` | in | — | — | Active-low reset |
@@ -44,7 +44,7 @@ So the architectural role is:
 | Parameter | Value | Notes |
 | --- | --- | --- |
 | Window length | 2^SF samples (per symbol) | Runtime-configurable via `SF_CFG` register |
-| Accumulator width | 32-bit | int8² = int16; 4096 samples × int16 → 28 bits min; 32-bit adds headroom |
+| Accumulator width | 32-bit | int16² = int32; 4096 samples × int32 → 44 bits worst-case — use 48-bit or saturate to 32-bit with right-shift; re-evaluate once decimator output width (12 or 16 bit) is decided |
 | Output width | 16-bit unsigned | Saturated right-shift of 32-bit accumulator |
 
 ---

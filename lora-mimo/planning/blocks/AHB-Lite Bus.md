@@ -23,7 +23,6 @@ The project decision is to use `AHB-Lite`, not Wishbone. Because PicoRV32 is not
 | `0x10100`–`0x101FF` | SPI master | SX1257 config writes |
 | `0x10200`–`0x102FF` | IRQ controller | Source read/clear |
 | `0x10300`–`0x103FF` | SWD TAP | Debug interface |
-| `0x20000`–`0xA7FFF` | Baseband SRAM (via arbiter) | FFT staging + guarded sample capture |
 
 ---
 
@@ -51,7 +50,7 @@ Current peripheral block notes may still show local `wb_*`-style placeholder reg
 
 **Custom PicoRV32 wrapper.** Implement a lightweight adapter that converts PicoRV32 memory/peripheral accesses into AHB-Lite transactions. This is intentionally custom rather than adopting a pre-existing Wishbone-centric integration.
 
-**Wait states.** Register bank and IRQ controller should respond in one transfer when possible. SPI master and Baseband SRAM path may insert wait states through `HREADY` deassertion; the PicoRV32 wrapper must stall cleanly until the transfer completes.
+**Wait states.** Register bank and IRQ controller should respond in one transfer when possible. SPI master may insert wait states through `HREADY` deassertion while a SPI transaction completes; the PicoRV32 wrapper must stall cleanly until the transfer completes.
 
 **Shared bus reset.** Slaves return idle-ready behavior after reset. The PicoRV32 wrapper must not issue valid transfers until reset is released and SRAM/SPI macros are stable.
 

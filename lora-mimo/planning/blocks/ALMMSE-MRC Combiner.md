@@ -28,7 +28,7 @@ y[1][n] = 0                               // REMOD_B idle
 ```
 `bypass_sel` is the index of the lowest-numbered antenna with its `ANTENNA_EN` bit set, decoded from the `bypass_ant` input.
 
-W is computed by PicoRV32 after `h_ready` from the FFT engine. Until current-packet W is valid, the combiner must not output zeros; it falls back to the selected bypass antenna so the SX1302 continues seeing a valid single-antenna LoRa stream. In passthrough mode W registers are not read.
+W is computed by PicoRV32 (or the hardware Weight Generation block) after `training_done` from the Training Accumulator. Until current-packet W is valid, the combiner must not output zeros; it falls back to the selected bypass antenna so the SX1302 continues seeing a valid single-antenna LoRa stream. In passthrough mode W registers are not read.
 
 ---
 
@@ -36,8 +36,8 @@ W is computed by PicoRV32 after `h_ready` from the FFT engine. Until current-pac
 
 | Port | Direction | Width | Rate | Description |
 | --- | --- | --- | --- | --- |
-| `x_i[3:0]` | in | 4×8 signed | 1 MS/s | I from decimators (4 antennas) |
-| `x_q[3:0]` | in | 4×8 signed | 1 MS/s | Q from decimators |
+| `x_i[3:0]` | in | 4×(12–16) signed | 1 MS/s | I from decimators (4 antennas; width TBD, matches decimator output) |
+| `x_q[3:0]` | in | 4×(12–16) signed | 1 MS/s | Q from decimators |
 | `x_valid` | in | 1 | 1 MS/s | Sample strobe |
 | `W_re[1:0][3:0]` | in | 8×16 signed | static | W matrix real — from W register bank |
 | `W_im[1:0][3:0]` | in | 8×16 signed | static | W matrix imaginary |
@@ -59,8 +59,8 @@ In NT=1 mode, only `y[0]` is valid; `y[1]` is zero.
 | Parameter | Value | Notes |
 | --- | --- | --- |
 | W precision | int16 Q1.15 | Written by PicoRV32 firmware |
-| x precision | int8 signed | From decimators |
-| Accumulator | int32 | int16 × int8 × 4 MACs = 27-bit minimum; truncate to int16 after accumulation |
+| x precision | 12–16 bit signed (TBD) | From decimators; matches decimator output width |
+| Accumulator | int32 | int16 × int16 × 4 MACs = 32-bit minimum; truncate to int16 after accumulation (verify headroom once input width is decided) |
 | MACs per sample (NT=1) | 4 complex = 8 real MACs | |
 | MACs per sample (NT=2) | 8 complex = 16 real MACs | 2 output nodes × 4 antennas |
 | Output | int16 signed | Truncated from int32 accumulator |
@@ -116,7 +116,7 @@ This makes the first packet recoverable as a single-antenna packet if W arrives 
 
 ## Related blocks
 
-- [ΣΔ Decimator](ΣΔ%20Decimator.md) — int8 input
+- [ΣΔ Decimator](ΣΔ%20Decimator.md) — full-precision input (12–16 bit TBD)
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — writes W via AHB-Lite
 - [ΣΔ Re-modulator](ΣΔ%20Re-modulator.md) — consumes int16 output
 - [Register Map](../Register%20Map.md) — `W` matrix at `0x90`–`0xAF`
