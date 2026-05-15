@@ -1,9 +1,13 @@
 # System Architecture & Block Overview
 
-> Architecture B — NT=1 NR=4 MRC / NT=2 NR=4 ALMMSE multi-mode MIMO gateway ASIC.
-> GF180MCU. SSCS PICO Chipathon 2026. Tapeout deadline: September 2026.
+> Architecture — NT=1 NR=4 MRC single-mode MIMO gateway ASIC.
+> GF180MCU. 3.3 V core and IO. SSCS PICO Chipathon 2026. Tapeout deadline: September 2026.
 
 Related prototype hardware note: [AFE Characterisation Board](AFE%20Characterisation%20Board.md)
+
+Full pad list: [Pinout](Pinout.md)
+
+Deployment configurations (cascaded ASIC topology for NR>4): [Applications](Applications.md)
 
 ---
 
@@ -13,9 +17,9 @@ Related prototype hardware note: [AFE Characterisation Board](AFE%20Characterisa
 graph LR
     NODE1(["LoRa Node 1\nf₀+Δf"])
     NODE2(["LoRa Node 2\nf₀−Δf"])
-    SX1302["SX1302\nLoRa Baseband\nRadio A + Radio B"]
+    SX1302["SX1302\nLoRa Baseband\nRadio A"]
     RPI["Host RPi\nSX1302 HAL\nChirpStack"]
-    SWD([SWD Probe])
+    JTAG([JTAG Probe])
 
     NODE1 & NODE2 -->|868 MHz| ANT1 & ANT2 & ANT3 & ANT4
     ANT1 <-->|RF| FEM1
@@ -29,11 +33,10 @@ graph LR
     SX1 & SX2 & SX3 & SX4 <-->|"I+Q ΣΔ 32 MS/s\nSPI cfg 10 MHz"| CHIP
 
     CHIP -->|"ΣΔ re-mod A\n1-bit I+Q 32 MS/s"| SX1302
-    CHIP -->|"ΣΔ re-mod B\n1-bit I+Q 32 MS/s"| SX1302
     SX1302 -->|"SPI0 CS0\n(SX1302 HAL)"| RPI
     RPI -->|"SPI0 CS1\n(ASIC config)"| CHIP
-    CHIP -->|"IRQ"| RPI
-    SWD <-->|"SWDCLK / SWDIO"| CHIP
+    CHIP -->|"IRQ (JTAG_EN=0)"| RPI
+    JTAG <-->|"TCK/TMS/TDI/TDO\n(JTAG_EN=1)"| CHIP
     CLKBUF["PCB Clock Buffer\nTCXO 32 MHz · 1→5 fan-out"] -->|"32 MHz IQ_CLK"| CHIP
     CLKBUF -->|"32 MHz XTB ×4\n(1.8 V pk-pk max)"| SX1 & SX2 & SX3 & SX4
 
@@ -58,7 +61,7 @@ graph LR
 
         subgraph rx_fe["RX Front-End ×4"]
             direction LR
-            D1["ΣΔ Decimator 1\nCIC + FIR\n1-bit → int12/16 @ 1 MS/s"]
+            D1["ΣΔ Decimator 1\nCIC + FIR\n1-bit → int12/16 · 125–500 kS/s"]
             D2["ΣΔ Decimator 2"]
             D3["ΣΔ Decimator 3"]
             D4["ΣΔ Decimator 4"]
@@ -66,19 +69,19 @@ graph LR
 
         subgraph detection["Preamble Detection & Channel Estimation"]
             direction TB
+            DCR["DC Removal ×4\nIIR running-mean\nDC_ALPHA_SHIFT=8"]
             SC["Schmidl-Cox / Correlator\nsliding magnitude autocorr\nsc_lock · timing_ref"]
             EM["Energy Measurement\nper-antenna energy snapshot\nAGC / diagnostics"]
-            TACC["Training Accumulator\ndechirp + integrate preamble\nZ_j · training_done"]
+            TACC["Training Accumulator\nbranch cross-correlation\nZ_j · training_done"]
             PCFSM["Packet Control FSM\npacket phase · safe_switch\nbuf_freeze · W gating"]
-            FBUF["Frontend Buffer Controller\n1 kB rolling SRAM\n8-bit saturated @ SF6"]
+            FBUF["Frontend Buffer Controller\n1 kB rolling SRAM\n8-bit saturated · SF7 max"]
         end
 
-        subgraph combining["ALMMSE / MRC Combining"]
+        subgraph combining["MRC Combining"]
             direction LR
-            COMB["ALMMSE/MRC Combiner\nŷ[n] = W·x[n] per sample\ntime domain · int32→int16"]
-            REMOD_A["ΣΔ Re-mod A\n3rd order · int16 → 1-bit"]
-            REMOD_B["ΣΔ Re-mod B\n3rd order · int16 → 1-bit"]
-            COMB --> REMOD_A & REMOD_B
+            COMB["MRC Combiner\nŷ[n] = w^H·x[n] per sample\ntime domain · int32→int16"]
+            REMOD_A["ΣΔ Re-mod\n3rd order · int16 → 1-bit"]
+            COMB --> REMOD_A
         end
 
         subgraph ctrl["Control Plane"]
@@ -88,17 +91,18 @@ graph LR
             IRQC["IRQ Controller\ncorr_lock · training_done · tx events"]
             SPIS["SPI Slave\nRPi SPI0 CS1\nconfig + FW load"]
             SPIM["SPI Master\n→ SX1257 config\n(shared MOSI/MISO/SCK)"]
-            SWDTAP["SWD TAP\nPicoRV32 debug"]
+            JTAGTAP["JTAG TAP\nPicoRV32 debug"]
             WB["AHB-Lite Bus"]
             PICO <--> WB
-            WB <--> REGBANK & IRQC & SPIS & SPIM & SWDTAP
+            WB <--> REGBANK & IRQC & SPIS & SPIM & JTAGTAP
         end
 
-        D1 & D2 & D3 & D4 --> SC
-        D1 & D2 & D3 & D4 --> EM
-        D1 & D2 & D3 & D4 --> COMB
-        D1 & D2 & D3 & D4 -->|"raw full-precision samples"| TACC
-        D1 & D2 & D3 & D4 -->|"8-bit saturated IQ"| FBUF
+        D1 & D2 & D3 & D4 --> DCR
+        DCR --> SC
+        DCR --> EM
+        DCR -->|"full-precision samples"| TACC
+        DCR -->|"full-precision"| COMB
+        DCR -->|"8-bit saturated"| FBUF
         SC -->|"sc_lock · timing_ref"| PCFSM
         SC -->|"sc_lock · timing_ref"| TACC
         FBUF -->|"current · delayed samples"| SC
@@ -132,11 +136,10 @@ Notes:
 | RX CLK | PCB Clock Buffer | ASIC (shared) | 32 MHz clock | — |
 | SPI config | ASIC SPI master | SX1257_1–4 | RegMode, freq, gain | 10 MHz |
 | ΣΔ re-mod A | ASIC | SX1302 Radio A | 1-bit I+Q sigma-delta | 32 MS/s |
-| ΣΔ re-mod B | ASIC | SX1302 Radio B | 1-bit I+Q sigma-delta | 32 MS/s |
 | Host SPI | RPi SPI0 CS1 | ASIC SPI slave | Config registers + FW load | 10 MHz |
 | SX1302 SPI | RPi SPI0 CS0 | SX1302 | SX1302 HAL (packets, config) | 10 MHz |
 | IRQ | ASIC | RPi GPIO | Packet ready, error | GPIO |
-| SWD | SWD probe | ASIC SWD TAP | SWDCLK + SWDIO | — |
+| JTAG | JTAG probe | ASIC JTAG TAP | TCK + TMS + TDI + TDO | — |
 
 ### SX1257 → ASIC (RX, per antenna)
 
@@ -150,22 +153,18 @@ Notes:
 
 | Signal | Direction | Description |
 | --- | --- | --- |
-| `REMOD_A_I` / `REMOD_A_Q` | ASIC → SX1302 Radio A | Stream 1 — NT=1 combined / NT=2 node 1 |
-| `REMOD_B_I` / `REMOD_B_Q` | ASIC → SX1302 Radio B | Stream 2 — NT=2 node 2 (unused in NT=1) |
-| `REMOD_CLK` | ASIC → SX1302 | 32 MHz clock for SX1302 data sync (CLK_OUT mode per SX1257 §3.5.2) |
+| `REMOD_A_I` / `REMOD_A_Q` | ASIC → SX1302 Radio A | MRC combined stream |
 
-SX1302 IF channel config for NT=2: `if_cfg[0].freq_hz = +Δf`, `if_cfg[1].freq_hz = -Δf`.
-
-> **Clock source:** `REMOD_CLK` is derived from the existing `IQ_CLK` input (central TCXO buffer). No additional PLL required — ASIC fans the received 32 MHz out to SX1302. Uses the 1 spare pad; **0 spare pads remain**.
+> **SX1302 clock:** SX1302 CLK_IN is driven by SX1257_1 CLK_OUT (pin 10) directly on the PCB — no ASIC pad required. Per §3.5.2 SX1257 CLK_OUT outputs the buffered XTB reference (32 MHz); SX1257_2–4 CLK_OUT left NC.
 
 ### ASIC ↔ SX1257 (shared SPI config bus)
 
 | Signal | Description |
 | --- | --- |
-| `SPI_MOSI` | Shared — ASIC master drives when SX1257_CSn asserted; ASIC slave drives when HOST_CS asserted |
+| `SPI_MOSI` | Shared — ASIC master drives when a SX1257 is addressed; ASIC slave drives when HOST_CS asserted |
 | `SPI_MISO` | Shared — ASIC tristates when acting as SPI master |
 | `SPI_SCK` | Bidirectional — host drives during host→ASIC; ASIC drives during ASIC→SX1257 |
-| `SX1257_CS[3:0]` | ASIC → SX1257_1–4 chip selects |
+| `CS_A[1:0]` | ASIC → 74HC139 decoder (board-level) → SX1257_1–4 NSS. 2-bit address selects one device per transaction. |
 | `HOST_CS` | RPi SPI0 CS1 → ASIC chip select |
 
 ### SX1257 board-level pin dispositions (not ASIC pads)
@@ -178,7 +177,7 @@ The following SX1257 pins require a PCB-level decision; none connect to ASIC pad
 | XTA (pin 6) | All 4 devices: leave open (float) | When using XTB as TCXO/external clock input (§3.3.1), XTA must be left open. |
 | XTB (pin 8) | All 4 devices: receive 32 MHz from central clock buffer via 100 pF AC-cap | **CRITICAL ELECTRICAL LIMIT:** Max amplitude **1.8 V pk-pk** (§3.3.1). If central buffer is 3.3V, a voltage divider or 1.8V buffer is mandatory. This pin is the reference for both RX and TX PLLs, ensuring system-wide frequency alignment. |
 | CLK_IN (pin 11) | All 4 devices: leave NC | **Design Decision:** Using internal clock mode (§3.5.2) to save ASIC pads. Frequency lock is maintained via shared XTB reference. |
-| CLK_OUT (pin 10) | All 4 devices: leave NC | CLK_OUT is unused in the buffered clock architecture. Central buffer drives ASIC `IQ_CLK` directly. |
+| CLK_OUT (pin 10) | SX1257_1: CLK_OUT → SX1302 CLK_IN (PCB trace). SX1257_2–4: leave NC | SX1257_1 CLK_OUT provides the 32 MHz clock for SX1302 data sync (§3.5.2). No ASIC pad required. |
 
 ---
 
@@ -217,7 +216,7 @@ A surgical review of the SX1257 datasheet (v1.2) was performed on May 4, 2026. T
 | `SPI_SCK` | RPi → ASIC | Shared SPI clock |
 | `SPI_MOSI` | RPi → ASIC | Config writes + firmware binary |
 | `SPI_MISO` | ASIC → RPi | Status register readback |
-| `IRQ` | ASIC → RPi | Interrupt: packet ready, preamble lock |
+| `TCK_IRQ` | ASIC → RPi (JTAG_EN=0) | Interrupt: packet ready, preamble lock |
 
 ### Boot sequence (firmware load)
 
@@ -262,8 +261,8 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | Pressure Point | Stage | Risk | Mitigation/Verification Requirement |
 | --- | --- | --- | --- |
 | **Decimator Droop** | Stage 2 | Band-edge roll-off | FIR coefficients must be tuned to `DECIM_CFG`; verify cumulative frequency response is flat ±0.5 dB. |
-| **Combiner Truncation** | Stage 6 | Signal clipping or quantization noise | Firmware scaling of `W` matrix must maximize `int16` headroom without hitting saturating thresholds. |
-| **Re-modulator Stability** | Stage 7 | Integrator latch-up / Instability | Input must be strictly `< -3 dBFS`. Saturating adders are mandatory; wrap-around will cause permanent instability. |
+| **Combiner Truncation** | Stage 8 | Signal clipping or quantization noise | Firmware scaling of `W` matrix must maximize `int16` headroom without hitting saturating thresholds. |
+| **Re-modulator Stability** | Stage 9 | Integrator latch-up / Instability | Input must be strictly `< -3 dBFS`. Saturating adders are mandatory; wrap-around will cause permanent instability. |
 
 > **End-to-End Verification Requirement:** A 'bit-exactness' check is required. The RTL implementation must be validated against a high-precision Python reference model using test vectors across the full input dynamic range to ensure error-signal SNR reflects only LSB quantization and no correlated clipping artifacts.
 
@@ -271,19 +270,16 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | --- | --- | --- |
 | SX1257 DATA_I ×4 | 4 | |
 | SX1257 DATA_Q ×4 | 4 | |
-| SX1257 CLK (shared) | 1 | Central TCXO buffer → ASIC IQ_CLK pad |
-| SX1302 Radio A I+Q | 2 | ΣΔ re-mod stream 1 |
-| SX1302 Radio B I+Q | 2 | ΣΔ re-mod stream 2 |
-| SX1302 CLK_OUT | 1 | 32 MHz clock to SX1302 (fan-out of IQ_CLK) |
+| IQ_CLK | 1 | ASIC core clock = TCXO buffer output; same reference driven to SX1257 XTB on PCB |
+| SX1302 Radio A I+Q | 2 | ΣΔ re-mod stream (MRC output) |
 | SPI MOSI / MISO / SCK | 3 | Shared host↔ASIC and ASIC↔SX1257 |
-| SX1257 CS ×4 + Host CS | 5 | ASIC is RPi SPI0 CS1; SX1302 uses SPI0 CS0 |
-| Core CLK + RESET | 2 | |
-| SWD (SWDCLK + SWDIO) | 2 | |
+| CS_A[1:0] + HOST_CS | 3 | 2-bit address to board-level 74HC139 decoder → SX1257_1–4 NSS; HOST_CS = RPi SPI0 CS1 |
+| RESETB | 1 | Active-low chip reset |
+| JTAG / IRQ / GPIO mux (TCK_IRQ + TMS_GPIO0 + TDI_GPIO1 + TDO_GPIO2) | 4 | TCK_IRQ = IRQ (JTAG_EN=0) / TCK (JTAG_EN=1); TMS/TDI/TDO_GPIO0–2 = GPIO_0–2 (JTAG_EN=0) / JTAG pins (JTAG_EN=1); see [Pinout](Pinout.md) |
 | VDD IO 3.3V | 1 | |
-| VDD core 1.8V | 2 | Two pads for IR drop distribution |
-| GND | 4 | |
-| Spare | 0 | Used by SX1302 CLK_OUT |
-| **Total** | **33** | At ≤33 per-team allocation limit |
+| VDD core 1.8V | 1 | Single pad — IR drop must be verified in floorplan |
+| GND | 1 | Single pad — place at highest switching-current region |
+| **Total** | **25** | At ≤25 per-team allocation limit |
 
 ---
 
@@ -298,14 +294,11 @@ The following boundaries require explicit CDC treatment:
 | Boundary | Async signal(s) | Direction | Required treatment | Documented in |
 | --- | --- | --- | --- | --- |
 | RPi SPI slave | `HOST_CS`, `SPI_SCK`, `SPI_MOSI` | RPi → ASIC | 2-FF synchroniser on `HOST_CS` and `SPI_SCK` edges; or run SPI slave FSM in the SPI clock domain with AHB-Lite handshake | [SPI Slave](blocks/SPI%20Slave.md) |
-| SWD TAP | `SWDCLK`, `SWDIO` | Probe → ASIC | 2-FF synchroniser on `SWDCLK` into 32 MHz domain; or implement TAP entirely in `SWDCLK` domain with handshake | [SWD TAP](blocks/SWD%20TAP.md) |
-| SX1257 DIO inputs | `DIO0`–`DIO3` from each SX1257 | SX1257 → ASIC | 2-FF synchroniser per pin; see note below | [SPI Master](blocks/SPI%20Master.md) |
+| JTAG TAP | `TCK_IRQ`, `TMS_GPIO0`, `TDI_GPIO1` | Probe → ASIC | 2-FF synchroniser on `TCK_IRQ` into 32 MHz domain; or implement TAP entirely in TCK domain with handshake | [JTAG TAP](blocks/JTAG%20TAP.md) |
 
 **SX1257 I/Q bitstreams are NOT a CDC boundary.** All four SX1257s receive the 32 MHz reference on their **XTB** pins (sourced from a shared TCXO via a clock buffer), so their `I_OUT`/`Q_OUT` signals change on the falling edge of the same clock the ASIC uses. This is a timing-constraint problem (board-level setup/hold on pad inputs), not a metastability problem. **Note: Using CLK_IN (pin 11) is incorrect as it only feeds the TX DAC.**
 
-**SX1257 DIO pins.** The DIO outputs (`pll_lock_rx`, `pll_lock_tx` per Table 4-1 of SX1257 datasheet) are driven by SX1257 internal logic with no guaranteed phase relationship to the ASIC's sampling edge. They are only used during initialisation (PLL lock polling) and are not in the packet-data path. A 2-FF synchroniser on each connected DIO input is sufficient.
-
-> In practice, PLL lock can alternatively be checked by reading `RegModeStatus` (0x11) over SPI rather than routing DIO pins to pads. If the DIO pads are not bonded out, no synchroniser is needed — firmware polls via SPI instead. Decide at pad allocation time.
+**SX1257 DIO pins — not connected.** With 0 spare ASIC pads, DIO0–DIO3 from each SX1257 are not routed to ASIC pads. PLL lock is polled via `RegModeStatus` (0x11) over SPI instead. No CDC treatment required.
 
 ---
 
@@ -314,22 +307,23 @@ The following boundaries require explicit CDC treatment:
 | Component | GE | Area (est.) |
 | --- | --- | --- |
 | ΣΔ Decimator ×4 (CIC + FIR) | ~12,000 | |
+| DC Removal ×4 (IIR running-mean) | ~300 | |
 | Schmidl-Cox Detector (autocorr + threshold) | ~3,000 | |
-| Frontend Buffer Controller (1 kB SRAM + ctrl) | ~500 | |
-| Training Accumulator (chirp LUT + 4× int64 acc) | ~1,500 | |
+| Frontend Buffer Controller (1 kB SRAM + D=M ctrl) | ~500 | |
+| Training Accumulator (4× branch cross-corr, int64 acc) | ~1,500 | |
 | Weight Generation (shift + calibrate + compute) | ~2,000 | |
 | ALMMSE/MRC Combiner | ~10,000 | |
-| ΣΔ Re-mod ×2 | ~1,400 | |
+| ΣΔ Re-mod | ~700 | |
 | PicoRV32 RV32IM | ~10,000 | |
 | SPI Slave + SPI Master + AHB-Lite | ~5,000 | |
 | Register Bank (generated by custom Python tool) | ~1,000 | |
 | IRQ + misc | ~800 | |
-| **Logic total** | **~47,200 GE** | **~0.57 mm²** |
-| Frontend Buffer SRAM (1 kB × 2 macros) | — | ~0.02 mm² |
-| PicoRV32 IMEM+DMEM (64 KB) | — | ~0.52 mm² |
-| **Total** | | **~1.11 mm²** |
+| **Logic total** | **~46,800 GE** | **~0.56 mm²** |
+| Frontend Buffer SRAM (2 × `sram512x8m8wm1`) | — | ~0.19 mm² |
+| CPU unified SRAM (4 KB, 4 × `sram1024x8m8wm1`) | — | ~0.62 mm² |
+| **Total** | | **~1.37 mm²** |
 
-> FFT Engine (~10 K GE) and Baseband SRAM (544 KB, ~4.50 mm²) are removed in the non-FFT architecture, significantly reducing both logic area and SRAM area. The dominant area is now PicoRV32 IMEM+DMEM. Frontend Buffer uses two 512-byte single-port SRAM macros (one per 2-channel pair). GE estimates for new blocks are preliminary.
+> FFT Engine (~10 K GE) and Baseband SRAM (544 KB, ~4.50 mm²) are removed in the non-FFT architecture. CPU memory is a single unified 4 KB SRAM (text + data + stack). All SRAMs from `gf180mcu_ocd_ip_sram` experimental library at 3.3 V. GE estimates for new blocks are preliminary.
 
 ---
 
@@ -337,13 +331,10 @@ The following boundaries require explicit CDC treatment:
 
 | Mode | Config | Combining | Output | Notes |
 | --- | --- | --- | --- | --- |
-| 1 | NT=1, NR=4 | MRC | ΣΔ re-mod → SX1302 Radio A | Backward compatible, default |
-| 2 | NT=2, NR=4 | ALMMSE | ΣΔ re-mod ×2 → SX1302 Radio A+B | Extension mode; spatial separation is primary, small `Δf` may assist identification / estimation |
-| 3 | NT=1, NR=1 | Passthrough (bypass) | ΣΔ re-mod → SX1302 Radio A; Radio B idle | Stages 3–7 bypassed; single-antenna baseline for SNR/BER comparison |
+| 1 | NT=1, NR=4 | MRC | ΣΔ re-mod → SX1302 Radio A | Default; works with any standard LoRaWAN node |
+| 2 | NT=1, NR=1 | Passthrough (bypass) | ΣΔ re-mod → SX1302 Radio A | Stages 4–8 bypassed; single-antenna baseline for SNR/BER comparison |
 
-Mode auto-switches per frame (auto mode only); returns to Mode 1 on frame end. If `Δf` assist is used for NT=2, SX1302 IF channels must be configured accordingly. Mode 3 (passthrough) is selected by writing `MIMO_CTRL.MODE = 2`; antenna is chosen by the lowest set bit of `ANTENNA_EN`.
-
-> **NT=2 node coordination requirement.** `NT=2` remains an extension path. The current direction is simultaneous payload transmission with separation driven mainly by spatial processing; a small `Δf` may be used only as an identification or channel-estimation aid. Large symmetric offsets are no longer the preferred assumption because they risk bandwidth occupancy and compatibility problems. Standard LoRaWAN Class A nodes still will not intentionally overlap in the required way, so any real `NT=2` deployment requires custom node firmware or a network scheduler. This remains a private MIMO testbed extension, not a drop-in LoRaWAN upgrade. `NT=1` MRC mode operates normally with any standard LoRaWAN node and is unaffected.
+Mode 2 (passthrough) is selected by writing `MIMO_CTRL.MODE = 1`; antenna is chosen by the lowest set bit of `ANTENNA_EN`.
 
 ---
 
@@ -353,22 +344,23 @@ See [Work Allocation Summary](Work%20Allocation.md) for a more detailed assignme
 
 | Block | Owner | Spec |
 | --- | --- | --- |
-| ΣΔ Decimator ×4 (CIC + FIR) | TBD | — |
+| ΣΔ Decimator ×4 (CIC + FIR) | TBD | [ΣΔ Decimator](blocks/ΣΔ%20Decimator.md) |
+| DC Removal ×4 | TBD | [DC Removal](blocks/DC%20Removal.md) |
 | Schmidl-Cox Preamble Detector | TBD | [Correlator Bank](blocks/Correlator%20Bank.md) |
 | Frontend Buffer Controller (1 kB SRAM) | TBD | [Frontend Buffer Controller](blocks/Frontend%20Buffer%20Controller.md) |
 | Training Accumulator | TBD | [Training Accumulator](blocks/Training%20Accumulator.md) |
 | Weight Generation | TBD | [Weight Generation](blocks/Weight%20Generation.md) |
 | Packet Control FSM | TBD | [Packet Control FSM](blocks/Packet%20Control%20FSM.md) |
-| ALMMSE/MRC Combiner | TBD | — |
-| ΣΔ Re-mod ×2 | TBD | — |
+| MRC Combiner | TBD | [ALMMSE-MRC Combiner](blocks/ALMMSE-MRC%20Combiner.md) |
+| ΣΔ Re-modulator | TBD | [ΣΔ Re-modulator](blocks/ΣΔ%20Re-modulator.md) |
 | PicoRV32 RV32IM integration | TBD | [PicoRV32 Integration](blocks/PicoRV32%20Integration.md) |
-| PicoRV32 SRAM (64 KB OpenRAM) | TBD | — |
-| SPI Slave (host interface) | TBD | — |
-| SPI Master (→ SX1257) | TBD | — |
+| PicoRV32 SRAM (64 KB, experimental 3.3V macros) | TBD | [Memory Strategy](Memory%20Strategy.md) |
+| SPI Slave (host interface) | TBD | [SPI Slave](blocks/SPI%20Slave.md) |
+| SPI Master (→ SX1257) | TBD | [SPI Master](blocks/SPI%20Master.md) |
 | AHB-Lite Bus | TBD | — |
 | Register Bank (generated) | TBD | [Register Map](Register%20Map.md) · [Register Map Delta](Register%20Map%20Delta%20-%20Non-FFT.md) |
 | IRQ Controller | TBD | [IRQ Controller](blocks/IRQ%20Controller.md) |
-| SWD TAP | TBD | — |
+| JTAG TAP | TBD | — |
 | PicoRV32 firmware + algorithms | TBD | [MIMO Algorithms](MIMO%20Algorithms.md) |
 | Physical design & floorplan | TBD | — |
 | Verification (cocotb) | TBD | — |

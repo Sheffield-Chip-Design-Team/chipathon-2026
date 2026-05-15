@@ -2,286 +2,257 @@
 
 The digital signal processing chain is receive-only. The ASIC sits between four SX1257 RF front-ends and an SX1302 LoRa baseband processor, performing multi-antenna combining before passing re-modulated bitstreams to the SX1302 for LoRa demodulation.
 
-> **Note — Non-FFT frontend direction.**
-> The pipeline below reflects the original FFT-based acquisition design (Schmidl-Cox trigger → 3-pass RCTSL FFT → PicoRV32 weight computation). Active architecture work is instead proceeding on a **non-FFT streaming frontend** — see [Non-FFT LoRa Frontend Proposal](Non-FFT%20LoRa%20Frontend%20Proposal.md).
->
-> The FFT path is not used for the following reasons:
-> - The 3-pass RCTSL FFT requires ~128 KB of on-chip SRAM staging at SF12, which is incompatible with the available memory budget
-> - A streaming correlator-based approach (SC detection + preamble training accumulation) achieves the same outputs — timing, channel estimates, and combining weights — without any FFT staging SRAM
-> - With a fixed 8-symbol preamble, `timing_ref` from SC is sufficient to locate the packet boundary, removing the need for the SFD timing refiner that the FFT path previously provided
-> - CFO estimation is not required for MRC/EGC weight computation because common CFO cancels in the weight ratios; the SX1302 handles residual CFO during demodulation
->
-> This document is retained as a reference for the original design intent and for the bypass / passthrough path, which is unchanged.
-
-Three operating modes share the same hardware:
+Two operating modes share the same hardware:
 
 | Mode | Config | Combining | Output |
 | --- | --- | --- | --- |
 | 1 | NT=1, NR=4 | MRC | ΣΔ re-mod → SX1302 Radio A |
-| 2 | NT=2, NR=4 | ALMMSE | ΣΔ re-mod ×2 → SX1302 Radio A+B |
-| 3 | NT=1, NR=1 | Passthrough (bypass) | ΣΔ re-mod → SX1302 Radio A; Radio B idle |
+| 2 | NT=1, NR=1 | Passthrough (bypass) | ΣΔ re-mod → SX1302 Radio A |
 
 ---
 
 ## Stage-by-stage pipeline
 
-| Stage | Block | Input | Output | Rate ($f_s$) | Mode |
+| Stage | Block | Input | Output | Rate | Mode |
 | --- | --- | --- | --- | --- | --- |
 | 1 | SX1257 ΣΔ ADC (×4) | RF signal at each antenna | 1-bit I + 1-bit Q × 4 | 32 MS/s | All |
-| 2 | ΣΔ Decimator — CIC + FIR (×4) | 1-bit I+Q × 4 | int8 complex I+Q × 4 | **125 k – 1 MS/s** | All |
-| 3 | Schmidl-Cox Preamble Detector | int8 I+Q × 4 | sc_lock, timing_ref | Per 2 sym | Mode 1 & 2 |
-| 3.5 | Packet Control FSM | sc_lock, timing_ref, sample_count | live_fft_ready, safe_switch, active mode/antenna | Per packet | Mode 1 & 2 |
-| 4 | FFT Engine — Preamble Acq. (3-pass, RCTSL + Channel Est.) | int8 I+Q × 4 from SRAM | H matrix (4×NT), N₀, eps_sub | Per packet | Mode 1 & 2 |
-| 5 | Weight Computation (PicoRV32 firmware) | H (4×2), N₀ (4×1) | W matrix (2×4 int16 Q1.15) | Per packet | Mode 1 & 2 |
-| 6 | ALMMSE/MRC Combiner | W (2×4 int16), x[n] (4×1 int8) | ŷ[n] (2×1 int16) per sample | $f_s$ | Mode 1 & 2 |
-| 6' | Bypass MUX | int8 I+Q from selected antenna | int16 I+Q (sign-extended) | $f_s$ | Mode 3 only |
-| 7 | ΣΔ Re-modulator ×2 (3rd order) | int16 I+Q | 1-bit I+Q × 2 streams | 32 MS/s | All |
+| 2 | ΣΔ Decimator — CIC + FIR (×4) | 1-bit I+Q × 4 | int8–16 complex × 4 | **125–500 kS/s** | All |
+| 3 | DC Removal (×4) | Full-precision complex × 4 | DC-removed complex × 4 | f_s | All |
+| 4 | Frontend Buffer Controller | DC-removed samples | current + M-delayed samples per branch | f_s | Mode 1 |
+| 5 | SC Preamble Detector | current + delayed samples | `sc_lock`, `timing_ref` | per 2 sym | Mode 1 |
+| 5.5 | Packet Control FSM | `sc_lock`, `timing_ref`, `training_done`, `W_commit` | `buf_freeze`, `combiner_source`, `safe_switch` | per packet | Mode 1 |
+| 6 | Training Accumulator | DC-removed samples, `sc_lock`, `timing_ref` | `Z_j` (complex channel estimates), `E_ref`, `training_done` | per packet | Mode 1 |
+| 7 | Weight Generation | `Z_j`, `training_done` | `W_SHADOW`, `W_COMMIT` | per packet | Mode 1 |
+| 7' | Bypass MUX | int8 from selected antenna | int16 sign-extended | f_s | Mode 2 only |
+| 8 | MRC Combiner | `W_ACTIVE`, `x_j[n]` (4 branches) | `ŷ[n]` (1 stream) | f_s | Mode 1 |
+| 9 | ΣΔ Re-modulator (3rd order) | int16 I+Q | 1-bit I+Q | 32 MS/s | All |
 
 ---
 
-## Mode 3 — Passthrough (Bypass)
+## Mode 2 — Passthrough (Bypass)
 
-`MIMO_CTRL.MODE = 2` (register value 2, referred to as Mode 3 in human-facing numbering).
+`MIMO_CTRL.MODE = 1` (register value 1, referred to as Mode 2 in human-facing numbering).
 
-Stages 3–6 (Schmidl-Cox detector, FFT preamble engine, PicoRV32 weight computation, ALMMSE/MRC combiner) are clock-gated and their outputs ignored. A bypass MUX immediately after the decimators routes a single antenna's int8 samples directly into REMOD_A, sign-extended to int16:
+Stages 4–8 (SC detector, frontend buffer, training accumulator, weight generation, combiner) are clock-gated and their outputs ignored. A bypass MUX immediately after the decimators routes a single antenna's int8 samples directly into REMOD_A, sign-extended to int16:
 
 ```
 bypass_sel = lowest set bit of ANTENNA_EN[3:0]
-remod_a_in = sign_extend_8to16(x[bypass_sel][n])
-remod_b_in = 16'h0000  (midscale — REMOD_B held idle)
+remod_a_in = sign_extend(x[bypass_sel][n])
 ```
 
-**Antenna selection.** The lowest-numbered enabled antenna in `ANTENNA_EN` (bit 4 = ant0, bit 5 = ant1, …) is used. If all ANTENNA_EN bits are set (default `0xF0`), ant0 is selected. Disable unwanted antennas via `ANTENNA_EN` before entering passthrough mode to choose a specific antenna.
+**Antenna selection.** The lowest-numbered enabled antenna in `ANTENNA_EN` is used. Disable unwanted antennas via `ANTENNA_EN` before entering passthrough mode to choose a specific antenna.
 
-**Purpose.** Provides a hardware-verified single-antenna baseline with identical front-end, decimation, and re-modulation paths as the MRC/ALMMSE modes. BER vs SNR comparisons against Mode 1 and Mode 2 isolate purely the combining gain contribution.
+**Purpose.** Provides a hardware-verified single-antenna baseline with identical front-end, decimation, and re-modulation paths as MRC mode. BER vs SNR comparisons against Mode 1 isolate the combining gain contribution.
 
-**Latency.** Passthrough introduces only the decimator pipeline latency (same as other modes) plus 1 cycle for the bypass MUX — no additional latency from combining or weight computation.
-
-**PicoRV32.** Firmware is not involved in the passthrough datapath. The CPU continues running (AGC loop, TDD switching) unless held in reset.
+**Latency.** Passthrough introduces only the decimator pipeline latency plus 1 cycle for the bypass MUX.
 
 ---
 
 ## Stage 2 — ΣΔ Decimation
 
-Programmable CIC filter decimates the 32 MS/s bitstream to match the LoRa bandwidth (BW). This ensures that all downstream DSP blocks see exactly one symbol per $2^{SF}$ samples.
+Programmable CIC filter decimates the 32 MS/s bitstream to match the LoRa bandwidth. This ensures all downstream DSP blocks see exactly one symbol per 2^SF samples.
 
-| BW Selection | Ratio ($R$) | Sample Rate ($f_s$) | LSB Resolution |
-| --- | --- | --- | --- |
-| 125 kHz | 256× | 125 kS/s | 122 Hz (SF7 bin) |
-| 250 kHz | 128× | 250 kS/s | 244 Hz |
-| 500 kHz | 64× | 500 kS/s | 488 Hz |
-| 1000 kHz | 32× | 1000 kS/s | 976 Hz |
+| BW Selection | Ratio (R) | Sample Rate (f_s) |
+| --- | --- | --- |
+| 125 kHz | 256× | 125 kS/s |
+| 250 kHz | 128× | 250 kS/s |
+| 500 kHz | 64× | 500 kS/s |
 
-A 32-tap FIR compensation filter corrects the sinc frequency droop. The entire downstream pipeline is clock-gated by the `iq_valid` strobe from this block.
+All ratios are power-of-2 — samples/symbol = 2^SF exactly for all SF and all BW settings (M is BW-independent). A 32-tap FIR compensation filter corrects sinc frequency droop. The entire downstream pipeline is clock-gated by the `iq_valid` strobe.
+
+See [ΣΔ Decimator](blocks/ΣΔ%20Decimator.md).
 
 ---
 
-## Stage 3 — Schmidl-Cox Preamble Detector
+## Stage 3 — DC Removal
 
-Sliding-window autocorrelation across adjacent dechirped symbols. Detects the LoRa preamble and provides coarse timing.
-
-```
-SC_j[s] = dot( dechirp(rx_j, s) ,  dechirp(rx_j, s+1)* )
-         = |h_j|² · M · exp(j·2π·k_cfo / M)   (exact, any timing)
-```
-
-**Detection criterion** (incoherent sum across antennas):
+Per-branch running-mean subtraction removes residual DC bias introduced by the SX1257 direct-conversion mixer before any phase-sensitive correlation.
 
 ```
-Λ[s] = Σ_j |SC_j[s]| / √(E_j[s] · E_j[s+1])  ≥  θ_SC  (default 0.90)
+dc_est[j]  += (raw[j][n] - dc_est[j]) >> DC_ALPHA_SHIFT
+out[j][n]   = raw[j][n] - dc_est[j]
+```
+
+DC bias contaminates the SC detection metric, pooled CFO statistics, and training cross-correlation. Removal is mandatory before the Frontend Buffer and SC Detector.
+
+See [DC Removal](blocks/DC%20Removal.md).
+
+---
+
+## Stage 4 — Frontend Buffer Controller
+
+Manages the shared 1 kB dual-SRAM rolling history. Provides the current and M-sample-delayed raw samples needed by the SC Preamble Detector for adjacent-symbol autocorrelation. Frozen on `sc_lock` to preserve the acquisition history.
+
+At SF7 with 8-bit storage using D=M read-before-write: 1-symbol (128-sample) rolling delay per branch fits exactly in 2×512B macros. SF8 requires 4 macros; SF9 requires 8.
+
+See [Frontend Buffer Controller](blocks/Frontend%20Buffer%20Controller.md).
+
+---
+
+## Stage 5 — SC Preamble Detector
+
+Sliding-window complex autocorrelation across adjacent M-sample windows. Detects the LoRa preamble and provides coarse timing. No dechirp required — the LoRa chirp reference cancels algebraically in the autocorrelation product.
+
+**Per-branch statistic:**
+
+```
+c_j = Σ_{n=0}^{M-1} current_j[n] · conj(delayed_j[n])
+```
+
+**Incoherent combine across branches:**
+
+```
+Mag_SC     = Σ_j |c_j|²
+Energy_Ref = Σ_j E_j_curr · E_j_del
+```
+
+**Lock condition (multiplication form, avoids division):**
+
+```
+Mag_SC >= θ_SC² · Energy_Ref     (default θ_SC = 0.90)
 ```
 
 **Outputs:**
-- `sc_lock` — asserted when Λ exceeds threshold for the configured number of consecutive symbol pairs
-- `timing_ref` — estimated preamble-start sample index in `iq_valid` units, used to align FFT capture windows
+- `sc_lock` — asserted when statistic exceeds threshold for `SC_HITS_REQ` consecutive symbol pairs
+- `timing_ref` — estimated preamble-start sample index, back-calculated from the lock event
 
-`sc_lock` is not the FFT compute trigger. Since a Schmidl-Cox detector with `N_hit` required hits asserts only after observing about `N_hit + 1` symbols from the candidate preamble start, `timing_ref` is back-calculated to the estimated preamble origin. The Packet Control FSM then waits only until the live 8-symbol RCTSL window is resident:
+`sc_lock` is the terminal acquisition event in the non-FFT path. No downstream FFT or sync/downchirp refiner is needed — `timing_ref` alone locates the full packet.
 
-```
-fft_start      = timing_ref
-live_fft_ready = sample_count reached timing_ref + 8M - 1
-```
-
-Diagnostic capture may additionally keep pre/post guard samples around the live window:
-
-```
-capture_start = timing_ref - M/2
-capture_len   = 9M samples per antenna
-```
-
-At SF12 and NR=4 this diagnostic/protected capture requires `9 × 4096 × 4 × 2 bytes = 288 KB` of sample capture SRAM: 0.5 symbol pre-guard, 8 preamble symbols, and 0.5 symbol post-guard. The post-guard must not delay `live_fft_ready`; it is for analysis/protection, not a live FFT dependency.
-
-The SC phase is no longer the primary source for fractional CFO (`eps_sub`). Instead, the system uses the more robust RCTSL algorithm in Stage 4. SC is now dedicated to high-sensitivity lock detection and timing recovery.
-
-Exposed in status register `SC_STAT` (see [Register Map](Register%20Map.md)).
+See [Correlator Bank (SC)](blocks/Correlator%20Bank.md).
 
 ---
 
-## Stage 3.5 — Packet Control FSM
+## Stage 5.5 — Packet Control FSM
 
-Owns packet phase and safe handoff between the historical capture/FFT path and the live combiner/remod path. It latches `timing_ref`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` at packet start, asserts `live_fft_ready` when the 8-symbol RCTSL window is resident, and permits W/mode/antenna switching only at `safe_switch` boundaries.
+Owns packet phase and no-glitch switching between bypass and combined output. Converts SC timing events and weight-readiness signals into deterministic control for the frontend buffer, weight generation, and combiner.
+
+**States:** IDLE → PREAMBLE_ACQ → W_PENDING → PAYLOAD_ACTIVE → IDLE
 
 Key outputs:
-
-```
-live_fft_ready  = sample_count reached timing_ref + 8M - 1
-safe_switch     = packet idle boundary
-combiner_source = BYPASS until W_ACTIVE is valid for this packet
-```
-
-If W computation misses the safe switch point, the current packet remains in bypass and `W_MISSED_PACKET` is set. The FSM must not backpressure `iq_valid`; capture overflow or late W are status events, not live-stream stalls.
-
-With no mid-packet switching, `safe_switch` means the receiver is idle between packets. If `W_COMMIT` arrives while a packet is active, the current packet stays in bypass and the committed W is deferred to the next idle boundary.
+- `safe_switch` — receiver idle; W/mode/antenna active banks may update
+- `combiner_source` — bypass until W is valid for the current packet
+- `buf_freeze` — holds FRONTEND_BUF frozen from `sc_lock` to packet end
 
 See [Packet Control FSM](blocks/Packet%20Control%20FSM.md).
 
 ---
 
-## Stage 4 — FFT Engine — Preamble Acquisition (3-pass)
+## Stage 6 — Training Accumulator
 
-Triggered after `sc_lock` plus live 8-symbol capture readiness. Three passes extract fine CFO, integer timing/bin, and the full channel matrix using the RCTSL (Recursive Continuous Time Signal Likelihood) algorithm for sub-bin precision. Diagnostic guard capture must not block this live trigger.
+Estimates one complex channel coefficient per receive branch by cross-correlating preamble samples against a nominated reference branch. CFO cancels exactly in the cross-product — no CFO correction is needed at any CFO value.
 
-**Pass 1 — Fine CFO via RCTSL (~8 symbols):**
-
-Concatenates $N_{sym}$ dechirped preamble symbols starting at `timing_ref` and performs an **unpadded live FFT** on the $N_{sym} \cdot M$ concatenated samples. An incoherent magnitude-squared sum is taken across all antennas to produce a high-resolution spectrum $P[k]$. A 2× zero-padded mode may be retained for SF7/SF8 validation or diagnostics, but it is not required in the live acquisition path.
+**Per-branch cross-correlation:**
 
 ```
-eps_sub = RCTSL_Correction(argmax P[k])
+Z_j = Σ_n rx_j[n] · conj(rx_ref[n])
+    ≈ h_j · conj(h_ref) · N_acc
 ```
 
-RCTSL quadratic correction (Cui Yang et al.) provides sub-bin accuracy without requiring zero padding. The live SF12 RCTSL transform is $8 \text{ symbols} \times 4096 \text{ samples} = 32768$ complex points, requiring 128 KB of int16-complex staging. Optional 2× padded diagnostics require 256 KB.
+where the sum runs over the available preamble symbols after `sc_lock` (`N_acc ≈ 5·M` at SF6 with `SC_HITS_REQ=2`).
 
-**Pass 2 — Coarse Integer Bin:**
+Setting `w_j = conj(Z_j)` gives full MRC combining gain `Σ_j |h_j|²` without any explicit CFO estimation or derotation step.
 
-Standard length-$M$ FFT on dechirped samples (corrected by `eps_sub` in the time domain). 
+**Additional output:** `E_ref = Σ_n |rx_ref[n]|²` — reference branch energy over the same window. Enables recovery of absolute per-branch magnitudes from the relative estimates `Z_j`.
 
-```
-k_peak  = argmax Σ_j Σ_s |FFT(rx_corr_j, s)|
-```
-
-Finds the integer bin `k_peak ∈ {0 … M−1}`.
-
-**Pass 3 — Coherent Channel Estimation:**
-
-Coherent average of $D_j[s][k\_peak]$ across $N_{sym}$ symbols per antenna. Since `eps_sub` was removed in the time domain before Pass 2, no inter-symbol phase rotation is needed in the accumulator.
-
-```
-h_hat_j = (1 / (N_sym · M)) · Σ_s  D_j[s][k_peak]
-```
-
-**Outputs:**
-- `H` — 4×NT complex channel matrix (h_hat per antenna/node)
-- `N₀` — per-antenna noise variance from off-peak bins
-- `eps_sub` — final fractional CFO estimate
-- `h_ready` — asserted when H is valid; triggers Stage 5 weight computation
+See [Training Accumulator](blocks/Training%20Accumulator.md).
 
 ---
 
-## Stage 5 — Weight Computation
+## Stage 7 — Weight Generation
 
-Runs on PicoRV32 (RV32IM) after `h_ready` from Stage 4. Unaffected by decimation ratio change.
+Converts `Z_j` into combining weights `W` via a dual hardware/software path.
 
-Firmware reads H/N0/eps_sub, computes W, writes the `W_SHADOW` register bank, then pulses `W_CTRL.W_COMMIT`. The Packet Control FSM copies `W_SHADOW` into `W_ACTIVE` only when the receiver becomes idle. If the commit arrives while a packet is active, `W_MISSED_PACKET` is set for that packet and the live path stays in bypass.
-
-The timing budget is therefore bounded by packet phase, not by capture guard length:
+**Hardware path (EGC/MRC, deterministic, ~50 cycles):**
 
 ```
-available_cycles = (safe_switch_sample - h_ready_sample) * (32 MHz / f_s)
-required_cycles  = FFT tail/writeback + PicoRV32 W calculation + W_SHADOW writes
+SHIFT → CALIBRATE → COMPUTE (CORDIC or reciprocal) → SCALE → WRITE W_HW
 ```
 
-The implementation goal is for `h_ready -> W_COMMIT` to complete before the current packet ends. The fail-safe behavior is bypass for the current packet, never a mid-packet W update.
+With `WGT_AUTO_COMMIT=1`, the hardware path commits weights within ~50 cycles of `training_done` — enabling same-packet weight application at SF6 (payload starts ~69,000 cycles after `training_done`).
 
-**Weight-application policy note.**
+**Software path (firmware, ALMMSE / EMA smoothing):**
 
-There are two architectural choices for applying the weights estimated from a packet preamble:
+PicoRV32 is triggered by `IRQ_TRAINING_DONE`, reads `Z_j` from registers (or `W_HW` for EMA), computes any weight formula, writes `W_SHADOW`, and pulses `W_COMMIT`.
 
-1. **Same-packet application**
-   - estimate `H/N0/eps_sub` from the current packet preamble
-   - compute `W`
-   - apply `W` to a delayed or buffered version of the same packet payload
-   - requires additional live-path buffering or an explicitly supported mid-packet safe-switch policy
+`W_HW` read-only registers expose the hardware-computed result to firmware at all times, enabling EMA smoothing without re-deriving the raw per-packet estimate.
 
-2. **Next-packet application**
-   - estimate `H/N0/eps_sub` from packet `N`
-   - apply the resulting `W` beginning with packet `N+1`
-   - avoids payload-delay buffering and keeps the live path simple
-   - risks stale weights if the channel changes between packets
-
-**Current architecture choice:** default to **next-packet application**. The no-mid-packet-switching Packet Control FSM already matches this policy: if `W_COMMIT` arrives while a packet is active, the current packet stays in bypass and the committed `W` is activated only at the next idle boundary.
-
-**Future option:** same-packet application may be revisited if FPGA experiments show that a practical FIFO / SRAM delay can cover the `sc_lock -> h_ready -> W_COMMIT` latency at the supported SF range.
-
-> **Known limitation — MRC degradation at low SNR.**
-> MRC combining quality is bounded by channel estimation quality. At low SNR (observed in simulation at −5 dB per-antenna SNR with SF7), 8-symbol FFT averaging produces a noisy `H` estimate. Imperfect phase corrections can cause antenna streams to add partially destructively, making estimated MRC *worse* than the best single antenna. Ideal MRC (using true H) always equals or exceeds the best single antenna — the gap is the estimation loss.
->
-> **Implication for verification:** The BER vs SNR sweep should compare estimated MRC against ideal MRC (genie-aided) to quantify this loss across operating SNR range. The EMA averaging in firmware (see [PicoRV32 Integration](blocks/PicoRV32%20Integration.md)) partially mitigates this on static channels by smoothing H across packets.
+See [Weight Generation](blocks/Weight%20Generation.md).
 
 ---
 
-## Stage 6 — ALMMSE/MRC Combining
+## Stage 8 — MRC Combining
 
-Time-domain combining performed at the decimated rate $f_s$.
+Time-domain combining performed at the decimated rate f_s.
 
-**NT=1 (MRC):** `y[n] = w^H · x[n]`
-**NT=2 (ALMMSE):** `ŷ[n] = W · x[n]`
+`y[n] = w^H · x[n]`
 
-Capture and FFT run in parallel with the live stream. Before current-packet W is valid, the combiner falls back to the selected bypass antenna rather than outputting zeros:
+Before current-packet W is valid, the combiner falls back to the selected bypass antenna so the SX1302 continues seeing a valid single-antenna LoRa stream:
 
 ```
 if !W_valid:
-    y[0] = sign_extend_8to16(x[bypass_sel][n])
-    y[1] = 0
+    y[n] = sign_extend(x[bypass_sel][n])
 else:
-    y = combine(W_ACTIVE, x[n])
+    y[n] = w^H · x[n]
 ```
 
-PicoRV32 writes W into a shadow register bank and commits it atomically to `W_ACTIVE` after all words are written. The live MACs never read partially-written W.
+`W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` switch only at `safe_switch` boundaries (IDLE between packets). If W is not ready when the current packet ends, it activates on the next packet.
 
-`W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` switch only when the receiver is idle between packets. If W is not ready, or a packet is still active, the current packet stays in bypass and the commit is deferred.
+See [MRC Combiner](blocks/ALMMSE-MRC%20Combiner.md).
 
 ---
 
-## Stage 7 — ΣΔ Re-modulation
+## Stage 9 — ΣΔ Re-modulation
 
-3rd order ΣΔ modulator converts combined samples back to 32 MS/s bitstreams.
-*   For **125 kHz BW**, the oversampling ratio (OSR) is **256**, providing extremely high SQNR.
-*   For **1000 kHz BW**, the OSR is **32**, matching the original design spec.
+3rd order feed-forward ΣΔ modulator converts combined int16 samples back to a 32 MS/s bitstream for the SX1302 Radio A input.
+
+| BW | f_s (combiner output) | OSR | In-band SQNR (3rd order) |
+| --- | --- | --- | --- |
+| 125 kHz | 125 kS/s | 256 | > 130 dB |
+| 250 kHz | 250 kS/s | 128 | > 115 dB |
+| 500 kHz | 500 kS/s | 64 | > 100 dB |
+
+All OSR values give SQNR far exceeding LoRa requirements. The int16 combiner output is conservative — the quantisation noise floor is negligible at all supported bandwidths.
+
+See [ΣΔ Re-modulator](blocks/ΣΔ%20Re-modulator.md).
 
 ---
 
 ## Bring-up & Calibration Recommendations
 
-The programmable decimation ratio introduces dynamic constraints that must be managed by the host or PicoRV32 firmware during system operation.
-
 ### 1. Analog Filter Matching
-To prevent out-of-band noise from aliasing into the signal path, the **SX1257 analog roofing filter** (`RegRxBw`, 0x0D) must be matched to the selected digital bandwidth in `DECIM_CFG`.
+
+The SX1257 analog roofing filter (`RegRxBw`, 0x0D) must be matched to the selected digital bandwidth in `DECIM_CFG`.
 
 | DECIM_CFG | Digital BW | Recommended SX1257 Analog BW |
 | --- | --- | --- |
-| `0x03` | 125 kHz | 250 kHz (minimum setting) |
-| `0x02` | 250 kHz | 250 kHz |
-| `0x01` | 500 kHz | 500 kHz |
-| `0x00` | 1000 kHz | 750 kHz (max; some roll-off expected) |
+| `0x02` | 125 kHz | 250 kHz (minimum setting) |
+| `0x01` | 250 kHz | 250 kHz |
+| `0x00` | 500 kHz | 500 kHz |
 
-**Note:** If the analog filter is left wider than the digital sampling rate (e.g., decimate to 125 kS/s while filtering at 750 kHz), any signals or noise in the 62.5 kHz to 375 kHz range will alias directly into the LoRa signal band.
+If the analog filter is left wider than the digital sampling rate, signals and noise above the Nyquist frequency alias directly into the LoRa band.
 
 ### 2. Schmidl-Cox Threshold Calibration
-Schmidl-Cox sensitivity should be configurable per deployment environment with two knobs:
 
-- detection threshold `θ_SC` via register `SC_THR`
-- consecutive hit requirement via register `SC_HITS_REQ`
+- Detection threshold `θ_SC` via register `SC_THR`
+- Consecutive hit requirement via register `SC_HITS_REQ`
 
 Recommended starting points:
-*   **Default:** 0.90 (works well for static indoor channels; matches rpp0/gr-lora default).
-*   **Low SNR / mobile:** reduce to 0.75 to trade false-alarm rate for sensitivity.
-*   **Hit count:** default `SC_HITS_REQ = 2`; reduce to `1` for aggressive weak-signal mode, increase to `3` for conservative/noisy environments.
-*   **False-alarm floor:** at threshold 0.90, noise-only Λ < 0.10 with > 99.9% probability (SF7, NR=4).
+- **Default:** 0.90 — static indoor channels; matches rpp0/gr-lora default
+- **Low SNR / mobile:** reduce to 0.75 — trades false-alarm rate for sensitivity
+- **Hit count:** default `SC_HITS_REQ = 2`; 1 for aggressive weak-signal mode, 3 for noisy environments
+- **False-alarm floor:** at threshold 0.90, noise-only statistic < threshold with > 99.9% probability (SF6, NR=4)
 
-### 3. Resolution & Calibration
-Running at lower bandwidths (e.g., 125 kHz) increases frequency resolution by **8×** ($122 \text{ Hz}$ per bin at SF7).
-*   **Bring-up Tip:** Perform initial crystal calibration and CFO estimation at the lowest bandwidth to achieve the highest precision before switching to wideband modes.
-*   **Automatic Gain Scaling:** The `ΣΔ Decimator` provides automatic scaling; however, ensure that `SC_THR` and, if needed, `SC_HITS_REQ` are re-evaluated if switching between $R=32$ and $R=256$, as the noise floor shape may change slightly due to different CIC stopband responses.
+### 3. Weight Path Selection
+
+- **Hardware auto (`WGT_SRC=0`, `WGT_AUTO_COMMIT=1`):** same-packet MRC/EGC. No firmware involvement in the weight path.
+- **Software (`WGT_SRC=1`):** ALMMSE, EMA cross-packet smoothing, or custom formulas.
+- **EMA smoothing:** use `WGT_SRC=1`; firmware reads `W_HW` (hardware result), applies EMA in DMEM, writes back to `W_SHADOW`.
+
+Disable EMA (`ALPHA_SHIFT=0`) for mobile deployments where channel coherence time may be shorter than the averaging window.
+
+### 4. Initial Gain Setting
+
+Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitivity. The AGC loop converges within 1–3 packets via the `IRQ_CORR_LOCK` path. For a known deployment, pre-set `RX_GAIN_n` via SPI before releasing `CPU_RESET`.
 
 ---
 
@@ -289,8 +260,10 @@ Running at lower bandwidths (e.g., 125 kHz) increases frequency resolution by **
 
 | Constraint | Value | Impact |
 | --- | --- | --- |
-| Programmable Decimation | 32× to 256× | Native support for 125, 250, 500, 1000 kHz BW |
-| SC detection window | 2M samples (2 symbols) | Schmidl-Cox threshold Λ ≥ 0.90; CFO-immune |
-| Preamble coherent avg | 8 symbols | Optimal sensitivity (4.5 dB gain vs 1-symbol) |
-| FFT SRAM (SF12 RCTSL) | 128 KB live / 256 KB optional | Live path supports 32,768-pt unpadded RCTSL; optional 65,536-pt padded diagnostics |
-| ΣΔ re-mod order | 3rd order | High stability and SQNR across all OSRs (32–256) |
+| Decimation ratios | R=256, 128, 64 | Native support for 125, 250, 500 kHz BW; power-of-2 ensures integer M for all SF |
+| SC detection window | 2M samples (current + M-delayed) | Buffer stores M samples (D=M); SC correlation spans 2M |
+| Training accumulation | ~5 symbols (SC_HITS_REQ=2) | ~2 dB loss vs ideal 8-symbol average; acceptable baseline |
+| Weight gen (hardware) | ~50 clock cycles | Same-packet application feasible at all supported SF |
+| Weight gen (software) | < 5,000 cycles | > 1000× margin before payload at SF6/125 kHz |
+| Frontend Buffer SRAM | 1 kB (2 × 512 B macros) | SF7 maximum with D=M at 8-bit storage; SF8+ requires more macros |
+| ΣΔ re-mod | 3rd order, single instance | SQNR > 100 dB at OSR=64 (500 kHz BW) — LoRa headroom > 70 dB |

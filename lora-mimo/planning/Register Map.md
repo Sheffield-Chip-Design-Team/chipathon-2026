@@ -14,8 +14,13 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x00` | `CHIP_ID` | R | `0xA7` | — | Chip identification byte |
 | `0x01` | `CHIP_REV` | R | `0x01` | — | Silicon revision |
 | `0x02` | `CPU_RESET` | R/W | `0x01` | Control | [0] = cpu_reset (1 = PicoRV32 held in reset); write 0 to start CPU after firmware load |
+| `0x03` | `DEBUG_CTRL` | R/W | `0x00` | JTAG TAP | [0] JTAG_EN: 0=normal (TCK_IRQ=IRQ, TMS/TDI/TDO_GPIO_n=GPIO), 1=debug (4-pin JTAG active); [7:1] reserved |
+| `0x04` | `GPIO_DIR` | R/W | `0x00` | JTAG TAP | [0] GPIO_0 dir (TMS_GPIO0), [1] GPIO_1 dir (TDI_GPIO1), [2] GPIO_2 dir (TDO_GPIO2); 1=output, 0=input; [7:3] reserved. Ignored when JTAG_EN=1. |
+| `0x05` | `GPIO_OUT` | R/W | `0x00` | JTAG TAP | [0] GPIO_0 drive value, [1] GPIO_1, [2] GPIO_2; only drives pad when corresponding GPIO_DIR bit=1; [7:3] reserved. Ignored when JTAG_EN=1. |
+| `0x06` | `GPIO_IN` | R | `0x00` | JTAG TAP | [0] GPIO_0 sampled pad value, [1] GPIO_1, [2] GPIO_2; valid when JTAG_EN=0 and corresponding GPIO_DIR bit=0; [7:3] reserved |
+| `0x07`–`0x0F` | — | — | — | — | Reserved |
 | **Mode & Configuration** (`0x10`–`0x1F`) | | | | | |
-| `0x10` | `MIMO_CTRL` | R/W | `0x0F` | Control | [1:0] MODE (0=NT=1 MRC, 1=NT=2 ALMMSE, 2=passthrough, 3=auto); [7:4] ANTENNA_EN (1 bit per antenna, default all 4 enabled) |
+| `0x10` | `MIMO_CTRL` | R/W | `0xF0` | Control | [0] MODE (0=MRC, 1=passthrough); [1] reserved, write 0; [3:2] reserved; [7:4] ANTENNA_EN (1 bit per antenna, default all 4 enabled) |
 | `0x11` | `SF_CFG` | R/W | `0x07` | FFT Engine | [2:0] sf (0=SF5, 1=SF6, … 7=SF12); [7:3] reserved |
 | `0x12` | `CAPTURE_CTRL` | R/W | `0x00` | Baseband SRAM | [0] CAPTURE_EN (write 1 to arm); [1] CAPTURE_MODE (0=raw samples, 1=FFT output); [7:2] reserved |
 | `0x13` | `CAPTURE_STATUS` | R | `0x00` | Baseband SRAM | [0] CAPTURE_DONE; [1] CAPTURE_OVERFLOW; [7:2] reserved |
@@ -32,23 +37,23 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x1E` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Number of consecutive above-threshold SC hits required for `sc_lock`; valid range 1–3 |
 | `0x1F` | `SC_CFG` | R/W | `0x00` | Schmidl-Cox | [0] ENERGY_GATE_EN optional coarse energy floor enable; [7:1] reserved |
 | **Frequency Configuration** (`0x20`–`0x2F`) | | | | | |
-| `0x20` | `DELTA_F_HI` | R/W | `0x00` | Correlator Bank | Δf between NT=2 node frequencies [15:8], in Hz |
-| `0x21` | `DELTA_F_LO` | R/W | `0x00` | Correlator Bank | Δf [7:0], in Hz |
+| `0x20` | — | — | — | — | Reserved (was DELTA_F_HI; NT=2 removed) |
+| `0x21` | — | — | — | — | Reserved (was DELTA_F_LO; NT=2 removed) |
 | **Gain Control** (`0x30`–`0x3F`) | | | | | |
 | `0x30` | `RX_GAIN_0` | R/W | `0x3E` | SPI Master | SX1257_1 RegRxAnaGain mirror: [7:5] RxLnaGain (1=G1 max … 6=G6 min; steps: G1–G3 6 dB each, G3–G6 12 dB each), [4:1] RxBbGain (0–15, 2 dB/step, gain = −24+2×val dB), [0] LnaZin keep 0 (50 Ω); written by PicoRV32 AGC loop |
 | `0x31` | `RX_GAIN_1` | R/W | `0x3E` | SPI Master | SX1257_2 RegRxAnaGain mirror |
 | `0x32` | `RX_GAIN_2` | R/W | `0x3E` | SPI Master | SX1257_3 RegRxAnaGain mirror |
 | `0x33` | `RX_GAIN_3` | R/W | `0x3E` | SPI Master | SX1257_4 RegRxAnaGain mirror |
-| `0x34` | `TX_GAIN_0` | R/W | `0x08` | SPI Master | SX1257_1 TxGain (NT=2 only, node 1) |
-| `0x35` | `TX_GAIN_1` | R/W | `0x08` | SPI Master | SX1257_2 TxGain (NT=2 only, node 2) |
+| `0x34` | `TX_GAIN_0` | R/W | `0x08` | SPI Master | SX1257_1 TxGain — used during TDD TX window |
+| `0x35` | `TX_GAIN_1` | R/W | `0x08` | SPI Master | SX1257_2 TxGain — used during TDD TX window |
 | **Status Summary** (`0x40`–`0x4F`) | | | | | |
-| `0x40` | `ACTIVE_MODE` | R | `0x00` | Control | Current active mode per-frame: 0=NT=1 MRC, 1=NT=2 ALMMSE |
+| `0x40` | `ACTIVE_MODE` | R | `0x00` | Control | Current active mode: 0=MRC, 1=passthrough; latched at idle boundary from MIMO_CTRL.MODE shadow |
 | `0x41` | `COND_NUM_HI` | R | `0x00` | PicoRV32 FW | Channel matrix condition number [15:8], log dB, 0.1 dB/LSB; updated after each packet |
 | `0x42` | `COND_NUM_LO` | R | `0x00` | PicoRV32 FW | Condition number [7:0] |
 | `0x43` | `SNR_0_HI` | R | `0x00` | PicoRV32 FW | Post-combining SNR for node 0 [15:8], 0.1 dB/LSB; signed |
 | `0x44` | `SNR_0_LO` | R | `0x00` | PicoRV32 FW | SNR node 0 [7:0] |
-| `0x45` | `SNR_1_HI` | R | `0x00` | PicoRV32 FW | Post-combining SNR for node 1 [15:8] (NT=2 only) |
-| `0x46` | `SNR_1_LO` | R | `0x00` | PicoRV32 FW | SNR node 1 [7:0] |
+| `0x45` | — | — | — | — | Reserved (was SNR_1; NT=2 removed) |
+| `0x46` | — | — | — | — | Reserved |
 | `0x47` | `SC_STAT_HI` | R | `0x00` | Schmidl-Cox | Current Λ²[s] magnitude-squared value [15:8] (Q4.12) |
 | `0x48` | `SC_STAT_LO` | R | `0x00` | Schmidl-Cox | Current Λ²[s] magnitude-squared value [7:0] |
 | `0x49` | `IRQ_STATUS` | R | `0x00` | IRQ Controller | Sticky IRQ source bits: [0] CORR_LOCK, [1] H_READY, [2] W_MISSED_PACKET, [3] CAPTURE_DONE, [4] CAPTURE_OVERFLOW, [5] TX_PREP, [6] TX_DONE |
@@ -65,24 +70,16 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x55` | `ENERGY_2_LO` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 2 [7:0] |
 | `0x56` | `ENERGY_3_HI` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 3 [15:8] |
 | `0x57` | `ENERGY_3_LO` | R | `0x00` | Energy Measurement | Σ\|x\|² antenna 3 [7:0] |
-| **Correlator Magnitudes — Node 1 (+Δf)** (`0x58`–`0x67`) | | | | | |
-| `0x58` | `CORR_MAG_0_HI` | R | `0x00` | Correlator Bank | \|H₀,₁\|² antenna 0, node 1 (+Δf) [15:8] |
+| **SC Correlator Energy** (`0x58`–`0x67`) | | | | | |
+| `0x58` | `CORR_MAG_0_HI` | R | `0x00` | Correlator Bank | \|c₀\|² per-branch SC autocorr magnitude antenna 0 [15:8] |
 | `0x59` | `CORR_MAG_0_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| `0x5A` | `CORR_MAG_1_HI` | R | `0x00` | Correlator Bank | \|H₁,₁\|² antenna 1, node 1 [15:8] |
+| `0x5A` | `CORR_MAG_1_HI` | R | `0x00` | Correlator Bank | \|c₁\|² antenna 1 [15:8] |
 | `0x5B` | `CORR_MAG_1_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| `0x5C` | `CORR_MAG_2_HI` | R | `0x00` | Correlator Bank | \|H₂,₁\|² antenna 2, node 1 [15:8] |
+| `0x5C` | `CORR_MAG_2_HI` | R | `0x00` | Correlator Bank | \|c₂\|² antenna 2 [15:8] |
 | `0x5D` | `CORR_MAG_2_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| `0x5E` | `CORR_MAG_3_HI` | R | `0x00` | Correlator Bank | \|H₃,₁\|² antenna 3, node 1 [15:8] |
+| `0x5E` | `CORR_MAG_3_HI` | R | `0x00` | Correlator Bank | \|c₃\|² antenna 3 [15:8] |
 | `0x5F` | `CORR_MAG_3_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| **Correlator Magnitudes — Node 2 (−Δf)** (`0x60`–`0x6F`) | | | | | |
-| `0x60` | `CORR_MAG_4_HI` | R | `0x00` | Correlator Bank | \|H₀,₂\|² antenna 0, node 2 (−Δf) [15:8] |
-| `0x61` | `CORR_MAG_4_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| `0x62` | `CORR_MAG_5_HI` | R | `0x00` | Correlator Bank | \|H₁,₂\|² antenna 1, node 2 [15:8] |
-| `0x63` | `CORR_MAG_5_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| `0x64` | `CORR_MAG_6_HI` | R | `0x00` | Correlator Bank | \|H₂,₂\|² antenna 2, node 2 [15:8] |
-| `0x65` | `CORR_MAG_6_LO` | R | `0x00` | Correlator Bank | [7:0] |
-| `0x66` | `CORR_MAG_7_HI` | R | `0x00` | Correlator Bank | \|H₃,₂\|² antenna 3, node 2 [15:8] |
-| `0x67` | `CORR_MAG_7_LO` | R | `0x00` | Correlator Bank | [7:0] |
+| `0x60`–`0x6F` | — | — | — | — | Reserved (was NT=2 node 2 correlator; NT=2 removed) |
 | **H Matrix** (`0x70`–`0x8F`) | | | | | |
 | `0x70` | `H_00_RE_HI` | R | `0x00` | PicoRV32 FW | H[antenna 0, node 1] real [15:8], int16 Q1.15 |
 | `0x71` | `H_00_RE_LO` | R | `0x00` | PicoRV32 FW | H[0,1] real [7:0] |
@@ -116,39 +113,24 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x8D` | `H_31_RE_LO` | R | `0x00` | PicoRV32 FW | [7:0] |
 | `0x8E` | `H_31_IM_HI` | R | `0x00` | PicoRV32 FW | H[3,2] imag [15:8] |
 | `0x8F` | `H_31_IM_LO` | R | `0x00` | PicoRV32 FW | [7:0] |
-| **W Matrix** (`0x90`–`0xAF`) | | | | | |
-| `0x90` | `W_00_RE_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[node 1, antenna 0] real [15:8], int16 Q1.15; written by PicoRV32 |
-| `0x91` | `W_00_RE_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0x92` | `W_00_IM_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[0,0] imag [15:8] |
-| `0x93` | `W_00_IM_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0x94` | `W_01_RE_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[node 1, antenna 1] real [15:8] |
-| `0x95` | `W_01_RE_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0x96` | `W_01_IM_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[0,1] imag [15:8] |
-| `0x97` | `W_01_IM_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0x98` | `W_02_RE_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[node 1, antenna 2] real [15:8] |
-| `0x99` | `W_02_RE_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0x9A` | `W_02_IM_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[0,2] imag [15:8] |
-| `0x9B` | `W_02_IM_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0x9C` | `W_03_RE_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[node 1, antenna 3] real [15:8] |
-| `0x9D` | `W_03_RE_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0x9E` | `W_03_IM_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[0,3] imag [15:8] |
-| `0x9F` | `W_03_IM_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0xA0` | `W_10_RE_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[node 2, antenna 0] real [15:8] (NT=2 only) |
-| `0xA1` | `W_10_RE_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0xA2` | `W_10_IM_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[1,0] imag [15:8] |
-| `0xA3` | `W_10_IM_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0xA4` | `W_11_RE_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[node 2, antenna 1] real [15:8] |
-| `0xA5` | `W_11_RE_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0xA6` | `W_11_IM_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[1,1] imag [15:8] |
-| `0xA7` | `W_11_IM_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0xA8` | `W_12_RE_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[node 2, antenna 2] real [15:8] |
-| `0xA9` | `W_12_RE_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0xAA` | `W_12_IM_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[1,2] imag [15:8] |
-| `0xAB` | `W_12_IM_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0xAC` | `W_13_RE_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[node 2, antenna 3] real [15:8] |
-| `0xAD` | `W_13_RE_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
-| `0xAE` | `W_13_IM_HI` | R/W | `0x00` | ALMMSE/MRC Combiner | W[1,3] imag [15:8] |
-| `0xAF` | `W_13_IM_LO` | R/W | `0x00` | ALMMSE/MRC Combiner | [7:0] |
+| **W Vector — MRC weights** (`0x90`–`0x9F`) | | | | | |
+| `0x90` | `W_0_RE_HI` | R/W | `0x00` | MRC Combiner | w[antenna 0] real [15:8], int16 Q1.15; written by weight gen / PicoRV32 |
+| `0x91` | `W_0_RE_LO` | R/W | `0x00` | MRC Combiner | [7:0] |
+| `0x92` | `W_0_IM_HI` | R/W | `0x00` | MRC Combiner | w[0] imag [15:8] |
+| `0x93` | `W_0_IM_LO` | R/W | `0x00` | MRC Combiner | [7:0] |
+| `0x94` | `W_1_RE_HI` | R/W | `0x00` | MRC Combiner | w[antenna 1] real [15:8] |
+| `0x95` | `W_1_RE_LO` | R/W | `0x00` | MRC Combiner | [7:0] |
+| `0x96` | `W_1_IM_HI` | R/W | `0x00` | MRC Combiner | w[1] imag [15:8] |
+| `0x97` | `W_1_IM_LO` | R/W | `0x00` | MRC Combiner | [7:0] |
+| `0x98` | `W_2_RE_HI` | R/W | `0x00` | MRC Combiner | w[antenna 2] real [15:8] |
+| `0x99` | `W_2_RE_LO` | R/W | `0x00` | MRC Combiner | [7:0] |
+| `0x9A` | `W_2_IM_HI` | R/W | `0x00` | MRC Combiner | w[2] imag [15:8] |
+| `0x9B` | `W_2_IM_LO` | R/W | `0x00` | MRC Combiner | [7:0] |
+| `0x9C` | `W_3_RE_HI` | R/W | `0x00` | MRC Combiner | w[antenna 3] real [15:8] |
+| `0x9D` | `W_3_RE_LO` | R/W | `0x00` | MRC Combiner | [7:0] |
+| `0x9E` | `W_3_IM_HI` | R/W | `0x00` | MRC Combiner | w[3] imag [15:8] |
+| `0x9F` | `W_3_IM_LO` | R/W | `0x00` | MRC Combiner | [7:0] |
+| `0xA0`–`0xAF` | — | — | — | — | Reserved (was W row 2 for NT=2 node 2; NT=2 removed) |
 | **Noise Variance N₀** (`0xB0`–`0xB7`) | | | | | |
 | `0xB0` | `N0_0_HI` | R | `0x00` | FFT Engine | Noise variance N₀ antenna 0 [15:8], int16 |
 | `0xB1` | `N0_0_LO` | R | `0x00` | FFT Engine | [7:0] |
@@ -173,7 +155,7 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0xC8` | `FFT_NOISE_HI` | R | `0x00` | FFT Engine | Average off-peak noise magnitude [15:8] |
 | `0xC9` | `FFT_NOISE_LO` | R | `0x00` | FFT Engine | Average off-peak noise magnitude [7:0] |
 | **SX1257 Pass-Through** (`0xCA`–`0xCD`) | | | | | |
-| `0xCA` | `SX_TARGET` | R/W | `0x00` | SPI Master | [3:0] chip-select bitmask: bit 0=SX1257_1 … bit 3=SX1257_4; set multiple bits to broadcast a write (RDATA undefined for broadcast) |
+| `0xCA` | `SX_TARGET` | R/W | `0x00` | SPI Master | [1:0] device address: 0=SX1257_1, 1=SX1257_2, 2=SX1257_3, 3=SX1257_4; drives CS_A[1:0] → board-level 74HC139 decoder; [7:2] reserved |
 | `0xCB` | `SX_ADDR` | R/W | `0x00` | SPI Master | [6:0] target SX1257 register address |
 | `0xCC` | `SX_DATA` | R/W | `0x00` | SPI Master | Write data [7:0]; overwritten with read data after a read transaction completes |
 | `0xCD` | `SX_CTRL` | R/W | `0x00` | SPI Master | [0] RNW: 1=read, 0=write; [1] START: write 1 to trigger transaction, self-clears when BUSY deasserts; [2] BUSY: read-only, 1 while SPI transaction in progress |
@@ -233,19 +215,70 @@ PicoRV32: fetch from 0x00000, begin execution
 
 ---
 
+### `0x03` — DEBUG_CTRL (read/write)
+
+Controls JTAG debug mode for the four dual-function pads (`TCK_IRQ`, `TMS_GPIO0`, `TDI_GPIO1`, `TDO_GPIO2`).
+
+| Bits | Field | Description |
+| --- | --- | --- |
+| [0] | `JTAG_EN` | 0 = normal mode (pads serve as IRQ output + GPIO_0–2); 1 = JTAG debug mode (pads serve as TCK/TMS/TDI/TDO) |
+| [7:1] | — | Reserved, write 0 |
+
+**Mode switch procedure:** RPi reconfigures its `TCK_IRQ` GPIO as input before writing `JTAG_EN=1` to avoid bus contention. On debug exit, RPi writes `JTAG_EN=0` and reconfigures its GPIO as rising-edge interrupt input. While `JTAG_EN=1`, `GPIO_DIR`, `GPIO_OUT`, and `GPIO_IN` are ignored; RPi must poll `IRQ_STATUS` via SPI to detect interrupt sources rather than relying on the pad.
+
+---
+
+### `0x04` — GPIO_DIR (read/write)
+
+Direction register for GPIO_0–2 (pads `TMS_GPIO0`, `TDI_GPIO1`, `TDO_GPIO2` in normal mode). Has no effect when `JTAG_EN=1`.
+
+| Bits | Field | Description |
+| --- | --- | --- |
+| [0] | `GPIO0_DIR` | Direction for GPIO_0 / `TMS_GPIO0`: 0 = input (pad sampled to `GPIO_IN[0]`), 1 = output (pad driven from `GPIO_OUT[0]`) |
+| [1] | `GPIO1_DIR` | Direction for GPIO_1 / `TDI_GPIO1` |
+| [2] | `GPIO2_DIR` | Direction for GPIO_2 / `TDO_GPIO2` |
+| [7:3] | — | Reserved, write 0 |
+
+---
+
+### `0x05` — GPIO_OUT (read/write)
+
+Output drive value for GPIO_0–2. A pad is only driven when its `GPIO_DIR` bit is 1 and `JTAG_EN=0`.
+
+| Bits | Field | Description |
+| --- | --- | --- |
+| [0] | `GPIO0_OUT` | Drive value for GPIO_0 / `TMS_GPIO0` |
+| [1] | `GPIO1_OUT` | Drive value for GPIO_1 / `TDI_GPIO1` |
+| [2] | `GPIO2_OUT` | Drive value for GPIO_2 / `TDO_GPIO2` |
+| [7:3] | — | Reserved, write 0 |
+
+---
+
+### `0x06` — GPIO_IN (read-only)
+
+Sampled input value of GPIO_0–2 pads. Sampled synchronously into the 32 MHz domain via a 2-FF synchroniser per pad. Valid when `JTAG_EN=0` and the corresponding `GPIO_DIR` bit is 0. Reading this register while `GPIO_DIR[n]=1` returns the current driven value; reading it while `JTAG_EN=1` returns undefined (do not rely on).
+
+| Bits | Field | Description |
+| --- | --- | --- |
+| [0] | `GPIO0_IN` | Sampled pad value of GPIO_0 / `TMS_GPIO0` |
+| [1] | `GPIO1_IN` | Sampled pad value of GPIO_1 / `TDI_GPIO1` |
+| [2] | `GPIO2_IN` | Sampled pad value of GPIO_2 / `TDO_GPIO2` |
+| [7:3] | — | Returns 0 |
+
+---
+
 ### `0x10` — MIMO_CTRL (read/write)
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [1:0] | `MODE` | 0 = NT=1 NR=4 MRC (default); 1 = NT=2 NR=4 ALMMSE; 2 = passthrough (bypass); 3 = auto (switches per-frame on ±Δf preamble pair detect) |
+| [0] | `MODE` | 0 = MRC NR=4 (default); 1 = passthrough (bypass, single-antenna) |
+| [1] | — | Reserved, write 0 |
 | [3:2] | — | Reserved, write 0 |
 | [7:4] | `ANTENNA_EN` | Bit per antenna (bit 4=ant0, bit 5=ant1, bit 6=ant2, bit 7=ant3); default `0xF0` (all enabled) |
 
-In auto mode the `ACTIVE_MODE` register (0x40) reports which mode is active for the current frame.
+**MODE=1 (passthrough):** Stages 4–8 (frontend buffer, SC detector, training accumulator, weight generation, MRC combiner) are bypassed entirely. The lowest-numbered antenna with its `ANTENNA_EN` bit set is selected; its int8 decimated I+Q samples are sign-extended to int16 and routed directly to REMOD_A. PicoRV32 firmware is not involved and the W vector registers are ignored. Use this mode to obtain a single-antenna baseline for SNR/BER comparison against MRC combining gain.
 
-**MODE=2 (passthrough):** Stages 3–7 (energy measurement, correlator bank, FFT engine, weight computation, ALMMSE/MRC combiner) are bypassed entirely. The lowest-numbered antenna with its `ANTENNA_EN` bit set is selected; its int8 decimated I+Q samples are sign-extended to int16 and routed directly to REMOD_A. REMOD_B is held at zero (midscale input). PicoRV32 firmware is not involved and the W matrix registers are ignored. Use this mode to obtain a single-antenna baseline for SNR/BER comparison against MRC and ALMMSE combining gain.
-
-In MODE=0/1, before current-packet W has been committed, the live combiner also falls back to this bypass antenna. PicoRV32 writes W into shadow registers and commits it atomically; the combiner only reads the active W bank.
+In MODE=0, before current-packet W has been committed, the live combiner falls back to this bypass antenna. PicoRV32 (or hardware weight gen) writes W into shadow registers and commits it atomically; the combiner only reads the active W bank.
 
 Writes to `MODE` and `ANTENNA_EN` update shadow configuration while a packet is active. Hardware latches `ACTIVE_MODE` and `ACTIVE_ANTENNA_EN` only when the receiver is idle between packets. This prevents antenna/mode glitches in the live remodulated stream.
 
@@ -302,16 +335,9 @@ The FFT engine consumes the 8-symbol RCTSL window starting at `timing_ref` as so
 
 ---
 
-### `0x20` / `0x21` — DELTA_F (read/write)
+### `0x20` / `0x21` — reserved
 
-16-bit unsigned Δf in Hz between the two NT=2 node frequencies. Node 1 transmits at f₀+Δf, Node 2 at f₀−Δf.
-
-| Bits | Field | Description |
-| --- | --- | --- |
-| [15:8] | `DELTA_F_HI` | Upper byte at `0x20` |
-| [7:0] | `DELTA_F_LO` | Lower byte at `0x21` |
-
-Δf must be bin-aligned: `Δf = k₁ × BW / 2^SF` where k₁ is a non-zero integer and `2k₁ ≠ 2^SF` (i.e. not the Nyquist bin). Typical value: BW/4 (k₁ = 2^(SF−2)). Written at startup before MODE=1 or MODE=3.
+These addresses were `DELTA_F_HI` / `DELTA_F_LO` — the NT=2 node frequency offset. NT=2 has been removed. Addresses `0x20`–`0x21` are reserved; do not write.
 
 ---
 
@@ -331,14 +357,11 @@ Use for relative power comparison across antennas (e.g. to disable a faulty ante
 
 ---
 
-### `0x58`–`0x6F` — CORR_MAG[0..7] (read-only)
+### `0x58`–`0x5F` — CORR_MAG[0..3] (read-only) / `0x60`–`0x6F` — reserved
 
-Squared correlator output magnitudes from the 8-correlator bank (4 antennas × ±Δf). Latched at correlator lock after the 8-symbol coherent integration.
+`0x58`–`0x5F`: Per-branch SC autocorrelation magnitude |c_j|² for antennas 0–3. Latched at `sc_lock`. int16, unsigned. Used for per-antenna link quality assessment and AGC diagnostics.
 
-- `CORR_MAG[0..3]`: antennas 0–3 for node 1 (+Δf correlator)
-- `CORR_MAG[4..7]`: antennas 0–3 for node 2 (−Δf correlator)
-
-In NT=1 mode only `CORR_MAG[0..3]` are valid. int16, unsigned.
+`0x60`–`0x6F`: Reserved (were NT=2 node 2 correlator magnitudes; NT=2 removed).
 
 ---
 
@@ -417,14 +440,15 @@ Layout: H[NR_index, NT_index]. For NT=1 only columns 0 (H[0..3, 0]) are valid; f
 
 ---
 
-### `0x90`–`0xAF` — W matrix (read/write)
+### `0x90`–`0x9F` — W vector (read/write) / `0xA0`–`0xAF` — reserved
 
-Combining weight matrix W computed by PicoRV32 from H and N₀. These addresses are the firmware-visible `W_SHADOW` bank. The live combiner reads only `W_ACTIVE`, which updates atomically after firmware writes `W_CTRL.W_COMMIT` and the Packet Control FSM reaches an idle boundary. Host reads return the shadow bank for diagnostics/manual override.
+`0x90`–`0x9F`: MRC weight vector w (4 complex coefficients, int16 Q1.15). Written by the hardware weight generation FSM (auto path) or by PicoRV32 firmware (software path). These are the `W_SHADOW` bank; the live combiner reads only `W_ACTIVE`.
 
-Layout: W[NT_index, NR_index]. Firmware writes all W shadow words, then pulses `W_CTRL.W_COMMIT`. Hardware copies the complete shadow bank into the active bank at the next idle boundary; the combiner uses `W_ACTIVE` each sample period to compute `ŷ[n] = W·x[n]`.
+`W_ACTIVE` updates atomically after `W_CTRL.W_COMMIT` is pulsed and the Packet Control FSM reaches an idle boundary. Host reads of `0x90`–`0x9F` return the shadow bank for diagnostics/manual override.
 
-For MRC: `W = H^H` (conjugate transpose, normalised).
-For ALMMSE: `W = H^H · (H·H^H + σ²·I)^{-1}` computed in firmware using RV32IM MUL.
+For MRC: `w = conj(Z_j) / ||Z||` (computed by weight gen hardware or firmware).
+
+`0xA0`–`0xAF` are reserved (were W row 2 for NT=2; NT=2 removed).
 
 ---
 
@@ -444,7 +468,7 @@ Allows the RPi to issue arbitrary SX1257 register read/write transactions via th
 
 **Write sequence:**
 ```
-1. Write SX_TARGET  ← CS bitmask (e.g. 0x01 for SX1257_1)
+1. Write SX_TARGET  ← device address (0–3 for SX1257_1–4)
 2. Write SX_ADDR    ← SX1257 register address (e.g. 0x03 = RegFrfMsb)
 3. Write SX_DATA    ← value to write
 4. Write SX_CTRL    ← 0x02  (RNW=0, START=1)
@@ -453,7 +477,7 @@ Allows the RPi to issue arbitrary SX1257 register read/write transactions via th
 
 **Read sequence:**
 ```
-1. Write SX_TARGET  ← CS bitmask (single bit only)
+1. Write SX_TARGET  ← device address (0–3)
 2. Write SX_ADDR    ← SX1257 register address
 3. Write SX_CTRL    ← 0x03  (RNW=1, START=1)
 4. Poll  SX_CTRL    until BUSY (bit 2) = 0
@@ -461,6 +485,8 @@ Allows the RPi to issue arbitrary SX1257 register read/write transactions via th
 ```
 
 **Arbitration.** PicoRV32 firmware must poll `SX_CTRL[2]` (BUSY) before issuing any SPI master transaction. The host should only issue pass-through commands during a known idle window — either before `CPU_RESET` is released, or after asserting `CPU_RESET=1` again to freeze firmware.
+
+**No broadcast.** Only one device is selectable per transaction. For registers that apply uniformly to all SX1257s (e.g. frequency, filter bandwidth), the host or firmware must issue four sequential transactions with `SX_TARGET` = 0, 1, 2, 3.
 
 **Typical init registers** written via pass-through at startup:
 
@@ -473,7 +499,7 @@ Allows the RPi to issue arbitrary SX1257 register read/write transactions via th
 | `RegClkSelect` | `0x0E` | CLKOUT control; typically disabled (0x00) on all chips to reduce EMI as ASIC is driven by central buffer |
 | `RegTxDac` | `0x16` | TX DAC gain (SX1257_1/2 only) |
 
-Broadcast (all 4 chips, `SX_TARGET=0x0F`) is valid for register writes that apply uniformly (frequency, filter). Use single-chip target for per-chip settings (TX DAC, CLK enable).
+Issue four sequential writes (`SX_TARGET` = 0, 1, 2, 3) for registers that apply uniformly (frequency, filter). Per-chip settings (TX DAC, CLK enable) require individual targeting anyway.
 
 ---
 
@@ -481,7 +507,9 @@ Broadcast (all 4 chips, `SX_TARGET=0x0F`) is valid for register writes that appl
 
 | Range | Block |
 | --- | --- |
-| `0x00`–`0x0F` | Chip identity and global control |
+| `0x00`–`0x02` | Chip identity and global control |
+| `0x03`–`0x06` | JTAG/GPIO control (`DEBUG_CTRL`, `GPIO_DIR`, `GPIO_OUT`, `GPIO_IN`) |
+| `0x07`–`0x0F` | Reserved |
 | `0x10`–`0x1F` | Mode & configuration (incl. capture write pointer at `0x14`–`0x16`) |
 | `0x20`–`0x2F` | Frequency configuration |
 | `0x30`–`0x3F` | Gain control |

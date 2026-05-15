@@ -51,9 +51,42 @@ Description update only. Remove reference to FFT engine. SF_CFG now configures M
 
 Description update: W_SHADOW is now written by the weight generation block (hardware state machine or PicoRV32 reading Z_j), not by PicoRV32 reading FFT H/N0. Interface and bit layout unchanged.
 
-### `0x90`–`0xAF` — W matrix
+### `0x90`–`0xAF` — W matrix → W vector
 
-Description update: W is computed from Z_j (training accumulator output) by the weight generation block. The ALMMSE path (NT=2) is not supported in the non-FFT architecture. Only MRC, EGC, SC, and bypass modes apply.
+`0x90`–`0x9F`: W is now a 4-element complex vector (not a 2×4 matrix). Computed from Z_j by the weight generation block (hardware or PicoRV32 software path). NT=2 ALMMSE is removed; only MRC and passthrough modes apply.
+
+`0xA0`–`0xAF`: Reserved (were NT=2 second-row weights).
+
+---
+
+## NT=2 / ALMMSE removal
+
+Decided after non-FFT architecture lock. All NT=2 references are eliminated.
+
+| Address | Change |
+|---|---|
+| `0x10` `MIMO_CTRL` [1:0] | Was 2-bit field (0=MRC, 1=ALMMSE, 2=passthrough, 3=auto); now [0]=MODE (0=MRC, 1=passthrough), [1]=reserved. Reset value corrected to `0xF0`. |
+| `0x20`–`0x21` `DELTA_F` | Reserved. Was NT=2 node frequency offset; no longer needed. |
+| `0x34`–`0x35` `TX_GAIN_0/1` | Removed "NT=2 only" annotation; these are still used for TDD TX window switching. |
+| `0x40` `ACTIVE_MODE` | Values: 0=MRC, 1=passthrough (was 0=MRC, 1=ALMMSE). |
+| `0x45`–`0x46` `SNR_1` | Reserved (was NT=2 node 2 SNR). |
+| `0x60`–`0x6F` | Reserved (was NT=2 node 2 correlator magnitudes). |
+| `0xA0`–`0xAF` | Reserved (was NT=2 second row of W matrix). |
+
+---
+
+## JTAG / GPIO addition
+
+New registers at `0x03`–`0x06`. These addresses were previously unused (reserved) in the `0x00`–`0x0F` global control block.
+
+| Address | Name | R/W | Reset | Description |
+|---|---|---|---|---|
+| `0x03` | `DEBUG_CTRL` | R/W | `0x00` | [0] `JTAG_EN`: 0=normal (TCK_IRQ=IRQ out, TMS/TDI/TDO_GPIO_n=GPIO), 1=JTAG debug (4-pin JTAG active, IRQ suppressed on pad); [7:1] reserved |
+| `0x04` | `GPIO_DIR` | R/W | `0x00` | [0] GPIO_0 dir (`TMS_GPIO0`), [1] GPIO_1 dir (`TDI_GPIO1`), [2] GPIO_2 dir (`TDO_GPIO2`); 1=output, 0=input; ignored when `JTAG_EN=1`; [7:3] reserved |
+| `0x05` | `GPIO_OUT` | R/W | `0x00` | [0] GPIO_0 drive, [1] GPIO_1, [2] GPIO_2; only drives pad when `GPIO_DIR[n]=1` and `JTAG_EN=0`; [7:3] reserved |
+| `0x06` | `GPIO_IN` | R | `0x00` | [0] GPIO_0 sampled, [1] GPIO_1, [2] GPIO_2; valid when `JTAG_EN=0` and `GPIO_DIR[n]=0`; [7:3] return 0 |
+
+`0x07`–`0x0F` remain reserved.
 
 ---
 
@@ -150,15 +183,17 @@ Existing SC debug registers `0xD0`–`0xD9` conflict with the calibration extens
 
 | Range | Block |
 |---|---|
-| `0x00`–`0x0F` | Chip identity and global control — unchanged |
+| `0x00`–`0x02` | Chip identity and global control — unchanged |
+| `0x03`–`0x06` | JTAG/GPIO control: `DEBUG_CTRL`, `GPIO_DIR`, `GPIO_OUT`, `GPIO_IN` (new) |
+| `0x07`–`0x0F` | Reserved |
 | `0x10`–`0x1F` | Mode & configuration; `0x12`–`0x16` now Frontend Buffer |
-| `0x20`–`0x2F` | Frequency configuration — unchanged |
+| `0x20`–`0x2F` | `0x20`–`0x21` reserved (DELTA_F removed); `0x22`–`0x2F` reserved |
 | `0x30`–`0x3F` | Gain control — unchanged |
 | `0x40`–`0x4F` | Status summary — updated IRQ bits and PACKET_STATUS encoding |
 | `0x50`–`0x57` | Energy detector — unchanged |
-| `0x58`–`0x6F` | Correlator magnitudes — unchanged (SC energy/magnitude diagnostics) |
+| `0x58`–`0x6F` | `0x58`–`0x5F` SC per-branch autocorr magnitudes; `0x60`–`0x6F` reserved (NT=2 removed) |
 | `0x70`–`0x8F` | Z_j scaled readback (was H matrix) |
-| `0x90`–`0xAF` | W matrix — unchanged interface, updated source description |
+| `0x90`–`0xAF` | `0x90`–`0x9F` MRC weight vector w (4 complex, Q1.15); `0xA0`–`0xAF` reserved (NT=2 removed) |
 | `0xB0`–`0xB9` | Training diagnostics: N_ACC, Z_SHIFT, C_POOL, CFO_DIAG (was N0/EPS_SUB) |
 | `0xBA`–`0xBF` | Reserved |
 | `0xC0`–`0xC9` | Calibration coefficients branches 0–2 I (was FFT diagnostics) |
