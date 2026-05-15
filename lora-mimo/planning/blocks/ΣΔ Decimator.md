@@ -9,9 +9,11 @@ RX path stage 2. See [DSP Flow](../DSP%20Flow.md) for context.
 
 ## Function
 
-Converts the 1-bit sigma-delta bitstream from each SX1257 ΣΔ ADC into int8 complex I+Q samples. Four identical instances — one per antenna. A programmable-ratio CIC filter performs the primary decimation (32×–256×); an FIR compensation filter corrects the sinc frequency droop.
+Converts the 1-bit sigma-delta bitstream from each SX1257 ΣΔ ADC into full-precision complex I+Q samples. Four identical instances — one per antenna. A programmable-ratio CIC filter performs the primary decimation (32×–256×); an FIR compensation filter corrects the sinc frequency droop.
 
-**Goal:** Provide a baseband sampling rate $f_s$ that always matches the LoRa signal bandwidth (BW), ensuring the downstream correlator/FFT blocks see exactly $2^{SF}$ samples per symbol.
+**Goal:** Provide a baseband sampling rate $f_s$ that always matches the LoRa signal bandwidth (BW), ensuring the downstream blocks see exactly $2^{SF}$ samples per symbol.
+
+**Output precision:** The decimator outputs full-precision samples (12-bit or 16-bit per component, TBD — see open item below). **The 8-bit saturation for SRAM storage is performed by the Frontend Buffer Controller, not here.** The training accumulator, combiner, and AGC energy tap all require full-precision samples from this block.
 
 ---
 
@@ -24,8 +26,8 @@ Converts the 1-bit sigma-delta bitstream from each SX1257 ΣΔ ADC into int8 com
 | `clk_32m` | in | — | 32 MHz | Shared clock from SX1257_1 `CLK_OUT` |
 | `rst_n` | in | — | — | Active-low reset |
 | `decim_ratio` | in | 2 | static | 0=32× (1 MHz), 1=64× (500 kHz), 2=128× (250 kHz), 3=256× (125 kHz) |
-| `iq_out_i` | out | 8 signed | $f_s$ | Decimated I sample |
-| `iq_out_q` | out | 8 signed | $f_s$ | Decimated Q sample |
+| `iq_out_i` | out | 12–16 signed | $f_s$ | Decimated I sample (full precision; width TBD) |
+| `iq_out_q` | out | 12–16 signed | $f_s$ | Decimated Q sample (full precision; width TBD) |
 | `iq_valid` | out | 1 | $f_s$ | High for one cycle when output is valid |
 
 ---
@@ -38,7 +40,7 @@ Converts the 1-bit sigma-delta bitstream from each SX1257 ΣΔ ADC into int8 com
 | CIC stages ($N$) | 3 | Balanced for area and stopband rejection |
 | Accumulator width | 25-bit | `1 + N*log2(R_max) = 1 + 3*8 = 25` bits |
 | FIR taps | 32 | Coefficients programmable or optimized for $R=32$ |
-| Output width | int8 signed | Convergent rounding from normalized accumulator |
+| Output width | 12–16 bit signed (TBD) | Convergent rounding from normalized accumulator; see open item |
 
 ---
 
@@ -53,14 +55,28 @@ Converts the 1-bit sigma-delta bitstream from each SX1257 ΣΔ ADC into int8 com
 * $R=32 \rightarrow G = 32^3 = 2^{15}$
 * $R=256 \rightarrow G = 256^3 = 2^{24}$
 
-The block must normalize the result before the FIR stage to maintain constant signal swing into the int8 output. A programmable right-shift is used:
-* `shift = N * log2(R) - 8`
-* For $R=32$, shift by $15 - 8 = 7$ bits.
-* For $R=256$, shift by $24 - 8 = 16$ bits.
+The block must normalize the result before the FIR stage to maintain constant signal swing. A programmable right-shift targeting the output width `W_out` (12 or 16 bits, TBD):
+* `shift = N * log2(R) - (W_out - 1)`
+* Example at 12-bit, $R=256$: shift by $24 - 11 = 13$ bits.
+* Example at 16-bit, $R=256$: shift by $24 - 15 = 9$ bits.
+
+Implement the shift as a parameter so it can be adjusted when output width is decided.
 
 **FIR Compensation.** The droop shape depends on $R$. However, since LoRa is a wideband signal and we are sampling at the Nyquist rate ($f_s = BW$), the correction is primarily for the roll-off at the band edges. A single FIR coefficient set optimized for $R=32$ is usually sufficient for higher ratios, but a programmable coefficient SRAM can be added if silicon characterization shows significant ripple.
 
 **Clock domain.** Entire block runs at 32 MHz. `iq_valid` rate changes with `decim_ratio`. All downstream DSP (Energy Measurement, Correlator, Combiner) must use `iq_valid` as their clock enable.
+
+---
+
+## Open items
+
+**Output width TBD.** 12-bit or 16-bit per component. This affects:
+- Accumulator shift amount
+- Training accumulator int64 overflow margin (see [Training Accumulator](Training%20Accumulator.md) §Accumulator arithmetic)
+- Frontend Buffer saturation shift (`clamp(sample >> (W_out - 8), -128, 127)`)
+- Combiner input headroom
+
+Decision can be deferred to RTL — implement the output width as a parameter. 16-bit is the safe choice; 12-bit saves area in the combiner and training accumulator.
 
 ---
 
@@ -78,6 +94,8 @@ The block must normalize the result before the FIR stage to maintain constant si
 ## Related blocks
 
 - [Register Map](../Register%20Map.md) — `DECIM_CFG` at `0x1B`
-- [Energy Measurement](Energy%20Measurement.md) — clock-gated by `iq_valid`
-- [Correlator Bank](Correlator%20Bank.md) — integration length remains $2^{SF}$ samples
+- [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — receives full-precision output; performs 8-bit saturation for SRAM storage
+- [Training Accumulator](Training%20Accumulator.md) — receives full-precision output directly (not from SRAM)
+- [Energy Measurement](Energy%20Measurement.md) — receives full-precision output; clock-gated by `iq_valid`
+- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — receives full-precision output
 - [DSP Flow](../DSP%20Flow.md) — updated pipeline rates

@@ -9,7 +9,9 @@ Control block. See [System Architecture](../System%20Diagram.md) for context.
 
 ## Function
 
-SPI slave providing the RPi (SPI0 CS1) with register read/write access to all ASIC configuration and status registers, and burst read access to the Baseband SRAM capture region. Also handles firmware load (burst write to PicoRV32 IMEM).
+SPI slave providing the RPi (SPI0 CS1) with register read/write access to all ASIC configuration and status registers, and firmware load (burst write to PicoRV32 IMEM).
+
+> **Non-FFT path:** The burst SRAM read feature (Baseband SRAM capture region `0x40000`–`0x87FFF`) is **not required** — the 544 KB Baseband SRAM does not exist in the non-FFT architecture. The `sram_addr/rdata/req/grant` ports and burst read command can be omitted from the initial implementation. The core requirement is register access and firmware load only.
 
 ---
 
@@ -27,10 +29,10 @@ SPI slave providing the RPi (SPI0 CS1) with register read/write access to all AS
 | `reg_wdata` | out | 8 | Write data |
 | `reg_we` | out | 1 | Write enable to register bank |
 | `reg_rdata` | in | 8 | Read data from register bank |
-| `sram_addr` | out | 20 | Address for SRAM burst read (Baseband SRAM `0x00000`–`0x87FFF`; normal capture readback `0x40000`–`0x87FFF`) |
-| `sram_rdata` | in | 32 | Read data from Baseband SRAM |
-| `sram_req` | out | 1 | SRAM bus request |
-| `sram_grant` | in | 1 | SRAM bus grant from arbiter |
+| `sram_addr` | out | 20 | *(Optional — not required for non-FFT)* Address for SRAM burst read |
+| `sram_rdata` | in | 32 | *(Optional — not required for non-FFT)* Read data from SRAM |
+| `sram_req` | out | 1 | *(Optional — not required for non-FFT)* SRAM bus request |
+| `sram_grant` | in | 1 | *(Optional — not required for non-FFT)* SRAM bus grant |
 
 ---
 
@@ -45,13 +47,12 @@ Byte 1: data (write) or don't-care (read)
 MISO byte 1: register contents (read) or 0x00 (write)
 ```
 
-**Burst SRAM read (N+2 bytes):**
+**Burst SRAM read (N+2 bytes) — FFT path only, not required for non-FFT:**
 ```
 Byte 0: 0x80 | burst_flag | high_addr
 Byte 1: low_addr
 Bytes 2…N+1: MISO returns consecutive SRAM bytes, address auto-increments
 ```
-Host reads back the 288 KB capture region (`0x40000`–`0x87FFF`) at up to 10 MHz. The two-byte burst command supplies an offset within the capture window; the SPI slave adds `0x40000` for normal capture readback. Direct full-SRAM diagnostic addressing, if needed, should use an extended command because the Baseband SRAM address is now 20 bits.
 
 **Firmware load (burst write to IMEM):**
 ```
@@ -91,6 +92,6 @@ Write CPU_RESET=0 (0x02 ← 0x00)
 ## Related blocks
 
 - [Register Map](../Register%20Map.md) — all register addresses
-- [Baseband SRAM](Baseband%20SRAM.md) — burst read source (`0x40000`–`0x87FFF` capture region)
+- [Register Map Delta - Non-FFT](../Register%20Map%20Delta%20-%20Non-FFT.md) — updated register set for non-FFT path
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — IMEM target for firmware load; CPU_RESET register
 - [AHB-Lite Bus](AHB-Lite%20Bus.md) — internal bus for register access
