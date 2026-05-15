@@ -9,9 +9,12 @@ Control block. See [System Architecture](../System%20Diagram.md) for context.
 
 ## Function
 
-SPI slave providing the RPi (SPI0 CS1) with register read/write access to all ASIC configuration and status registers, and firmware load (burst write to PicoRV32 IMEM).
+SPI slave providing the RPi (SPI0 CS1) with:
 
-> **Non-FFT path:** The burst SRAM read feature (Baseband SRAM capture region `0x40000`–`0x87FFF`) is **not required** — the 544 KB Baseband SRAM does not exist in the non-FFT architecture. The `sram_addr/rdata/req/grant` ports and burst read command can be omitted from the initial implementation. The core requirement is register access and firmware load only.
+- byte-wide register read/write access to the ASIC configuration and status register bank
+- firmware load access into the PicoRV32 unified 4 kB CPU SRAM at `0x0000`–`0x0FFF`
+
+> **Non-FFT path:** The FFT-era burst SRAM read feature is removed from the active architecture. This block does **not** need any interface to the legacy 544 kB Baseband SRAM. The active requirements are register access plus firmware load into CPU SRAM only.
 
 ---
 
@@ -29,10 +32,12 @@ SPI slave providing the RPi (SPI0 CS1) with register read/write access to all AS
 | `reg_wdata` | out | 8 | Write data |
 | `reg_we` | out | 1 | Write enable to register bank |
 | `reg_rdata` | in | 8 | Read data from register bank |
-| `sram_addr` | out | 20 | *(Optional — not required for non-FFT)* Address for SRAM burst read |
-| `sram_rdata` | in | 32 | *(Optional — not required for non-FFT)* Read data from SRAM |
-| `sram_req` | out | 1 | *(Optional — not required for non-FFT)* SRAM bus request |
-| `sram_grant` | in | 1 | *(Optional — not required for non-FFT)* SRAM bus grant |
+| `fw_ld_addr` | out | 12 | Byte address into unified CPU SRAM (`0x000`–`0xFFF`) |
+| `fw_ld_wdata` | out | 8 | Firmware-load write data byte |
+| `fw_ld_we` | out | 1 | Firmware-load write strobe |
+| `fw_ld_rdata` | in | 8 | Optional firmware-readback byte for debug / verification |
+| `fw_ld_req` | out | 1 | Firmware-load request |
+| `fw_ld_ready` | in | 1 | Firmware-load port ready / accepted |
 
 ---
 
@@ -40,38 +45,100 @@ SPI slave providing the RPi (SPI0 CS1) with register read/write access to all AS
 
 **SPI mode:** Mode 0 (CPOL=0, CPHA=0). MSB first.
 
-**Single register access (2 bytes):**
+### Single register access (2 bytes)
+
 ```
 Byte 0: [7] R/W̄  [6:0] address
 Byte 1: data (write) or don't-care (read)
 MISO byte 1: register contents (read) or 0x00 (write)
 ```
 
-**Burst SRAM read (N+2 bytes) — FFT path only, not required for non-FFT:**
+Rules:
+
+- Every normal register transaction is exactly 2 bytes under one `HOST_CS` assertion.
+- Address `0x7F` is reserved as an extended-command escape and must not be assigned to a normal register.
+- The active register set for tapeout is the non-FFT map in [Register Map Delta - Non-FFT](../Register%20Map%20Delta%20-%20Non-FFT.md).
+
+### Extended command escape
+
+If Byte 0 is `0x7F`, the SPI slave enters extended-command mode instead of normal register mode:
+
 ```
-Byte 0: 0x80 | burst_flag | high_addr
-Byte 1: low_addr
-Bytes 2…N+1: MISO returns consecutive SRAM bytes, address auto-increments
+Byte 0: 0x7F                // escape
+Byte 1: opcode
+Byte 2: addr_hi[3:0]        // CPU SRAM byte address [11:8] in low nibble; high nibble = 0
+Byte 3: addr_lo[7:0]        // CPU SRAM byte address [7:0]
+Byte 4: len_minus_1         // transfer length = 1..256 bytes
+Byte 5...: payload or dummy bytes depending on opcode
 ```
 
-**Firmware load (burst write to IMEM):**
+`HOST_CS` must remain asserted for the entire extended command. If `HOST_CS` deasserts before the declared payload length completes, the command is aborted and any partial final byte is discarded.
+
+### Extended opcode `0x01` — firmware load write
+
 ```
-Write CPU_RESET=1 (0x02 ← 0x01)
-Burst write to IMEM base address
-Write CPU_RESET=0 (0x02 ← 0x00)
+Byte 0: 0x7F
+Byte 1: 0x01
+Byte 2: addr_hi
+Byte 3: addr_lo
+Byte 4: len_minus_1
+Bytes 5...(5+N-1): payload bytes written to CPU SRAM, auto-incrementing address
+```
+
+Semantics:
+
+- Valid address range is `0x000`–`0xFFF` only.
+- The slave auto-increments `fw_ld_addr` after each accepted byte.
+- Writes beyond `0x0FFF` are ignored once the address reaches the top of the 4 kB CPU SRAM window.
+- Firmware writes are only permitted while `CPU_RESET[0] = 1`. Host software must assert `CPU_RESET` before issuing this command.
+- MISO returns `0x00` for all bytes of a write command.
+
+### Extended opcode `0x02` — firmware readback
+
+Optional but recommended for bring-up and cocotb verification.
+
+```
+Byte 0: 0x7F
+Byte 1: 0x02
+Byte 2: addr_hi
+Byte 3: addr_lo
+Byte 4: len_minus_1
+Bytes 5...(5+N-1): host sends dummy bytes; MISO returns CPU SRAM bytes, auto-incrementing address
+```
+
+Semantics:
+
+- Readback uses the same `0x000`–`0xFFF` byte-address window and auto-increment rule as write.
+- MISO during bytes 0–4 is `0x00`.
+- Returned data begins on byte 5.
+
+### Boot sequence
+
+```
+1. Host writes CPU_RESET = 1 via register 0x02
+2. Host issues one or more extended opcode 0x01 firmware-load writes starting at address 0x000
+3. Host optionally verifies contents with extended opcode 0x02
+4. Host writes CPU_RESET = 0 via register 0x02
+5. PicoRV32 fetches from 0x00000
 ```
 
 ---
 
 ## Implementation notes
 
-**Clock domain crossing.** SPI clock (up to 10 MHz) and 32 MHz system clock are asynchronous. Synchronise `HOST_CS` and `SPI_SCK` edges into the 32 MHz domain with a 2-FF synchroniser. Alternatively, run the SPI state machine entirely in the SPI clock domain and use a handshake for register access.
+**Clock domain crossing.** SPI clock (up to 10 MHz) and 32 MHz system clock are asynchronous. Run the SPI shifter and frame parser in the SPI clock domain, then cross completed register operations and firmware-load bytes into `clk_32m` with a small handshake or async FIFO. Do not try to edge-detect `SPI_SCK` directly inside the 32 MHz domain.
 
 **MISO tristate.** Drive `SPI_MISO` only when `HOST_CS` is asserted. Tristate (or drive low) otherwise — the line is shared with the ASIC's SPI master output via the shared SPI bus.
 
 **Bus conflict.** `HOST_CS` and `SX1257_CS[3:0]` are mutually exclusive by design (RPi and PicoRV32 never assert simultaneously). No explicit arbitration needed if firmware protocol is respected.
 
 **Register bank.** Thin address decoder maps `reg_addr` to the register file. Writable registers latch `reg_wdata` on `reg_we`. Read-only registers ignore `reg_we`.
+
+**Firmware-load datapath.** The firmware-load port is byte-oriented at the SPI slave boundary. The downstream CPU SRAM wrapper may pack these writes into 32-bit macro writes internally, but that packing is not visible on the host SPI interface.
+
+**Throughput.** At 10 MHz SPI, one payload byte arrives every 0.8 us. The firmware-load sink only needs to sustain 1.25 MB/s peak. A one-byte ready/accept handshake is sufficient; no DMA is required.
+
+**Command decoding.** Normal 2-byte register frames and extended `0x7F` frames are distinct protocol classes. The parser must commit to one class from Byte 0 and must not reinterpret a partially received extended frame as a register access.
 
 ---
 
@@ -82,16 +149,80 @@ Write CPU_RESET=0 (0x02 ← 0x00)
 | CHIP_ID read | cocotb SPI master; read 0x00 | Returns 0xA7 |
 | Register write + readback | Write known pattern to all R/W registers; read back | Byte-identical readback |
 | Read-only register write | Write to CHIP_ID; read back | Still returns 0xA7 |
-| Burst SRAM read | Fill SRAM with known pattern; burst read via SPI | Data matches pattern |
-| Firmware load | Write 256-byte binary via burst; read IMEM back | Contents match |
-| CPU_RESET sequence | Assert, load, de-assert; monitor PicoRV32 fetch | CPU starts fetching from 0x0000 |
+| Extended-command decode | Send `0x7F` frame with opcode `0x01` and `0x02` | Correct command selected; normal register path not triggered |
+| Firmware load write | Write 256-byte binary with opcode `0x01` starting at `0x000` | `fw_ld_addr` auto-increments; contents match expected bytes |
+| Firmware readback | Preload CPU SRAM; read with opcode `0x02` | MISO returns byte-identical contents starting on byte 5 |
+| CPU_RESET sequence | Assert, load, de-assert; monitor PicoRV32 fetch | CPU starts fetching from `0x00000` |
+| Early-CS abort | Deassert `HOST_CS` mid-extended command | Partial trailing byte discarded; next transaction starts cleanly |
 | Back-to-back transactions | Multiple single-byte accesses | No missed edges; correct data each transaction |
 
 ---
 
 ## Related blocks
 
-- [Register Map](../Register%20Map.md) — all register addresses
-- [Register Map Delta - Non-FFT](../Register%20Map%20Delta%20-%20Non-FFT.md) — updated register set for non-FFT path
-- [PicoRV32 Integration](PicoRV32%20Integration.md) — IMEM target for firmware load; CPU_RESET register
+- [Register Map Delta - Non-FFT](../Register%20Map%20Delta%20-%20Non-FFT.md) — active register set for tapeout
+- [Register Map](../Register%20Map.md) — legacy base map; superseded where the non-FFT delta differs
+- [PicoRV32 Integration](PicoRV32%20Integration.md) — unified 4 kB CPU SRAM target for firmware load; `CPU_RESET` register
 - [AHB-Lite Bus](AHB-Lite%20Bus.md) — internal bus for register access
+
+---
+
+## Packet diagrams
+
+### Monospace bitfield view
+
+```text
+Normal register access
+Byte 0: [7] R/W  [6:0] REG_ADDR
+Byte 1: [7:0] DATA / DUMMY
+
+Extended command
+Byte 0: 0x7F
+Byte 1: OPCODE
+Byte 2: ADDR_HI[3:0]
+Byte 3: ADDR_LO[7:0]
+Byte 4: LEN_MINUS_1
+Byte 5+: PAYLOAD or DUMMY
+```
+
+### Mermaid field layout
+
+```mermaid
+flowchart TD
+    A["SPI Slave Register Packet"] --> B["Byte 0"]
+    B --> C["bit7: R/W"]
+    B --> D["bits6:0: REG_ADDR"]
+    A --> E["Byte 1"]
+    E --> F["write: DATA[7:0]"]
+    E --> G["read: dummy on MOSI, REG_RDATA[7:0] on MISO"]
+```
+
+```mermaid
+flowchart TD
+    A["SPI Slave Extended Packet"] --> B["Byte 0: 0x7F escape"]
+    B --> C["Byte 1: OPCODE"]
+    C --> D["Byte 2: ADDR_HI[3:0]"]
+    D --> E["Byte 3: ADDR_LO[7:0]"]
+    E --> F["Byte 4: LEN_MINUS_1"]
+    F --> G["Byte 5..N: payload or dummy bytes"]
+```
+
+### Mermaid transaction flow
+
+```mermaid
+sequenceDiagram
+    participant H as Host RPi
+    participant S as ASIC SPI Slave
+    participant M as CPU SRAM Load Port
+
+    H->>S: CS low, Byte0=0x7F
+    H->>S: Byte1=0x01 (fw write)
+    H->>S: Byte2=addr_hi
+    H->>S: Byte3=addr_lo
+    H->>S: Byte4=len-1
+    loop payload bytes
+        H->>S: data byte
+        S->>M: fw_ld_addr, fw_ld_wdata, fw_ld_we
+    end
+    H->>S: CS high
+```

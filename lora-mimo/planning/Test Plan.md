@@ -139,12 +139,13 @@
 
 ### Block 7 — SPI Slave (host interface)
 
-**Pass criterion:** All register R/W operations via RPi SPI0 match expected values. CHIP_ID reads `0xA7`. Burst SRAM readback produces byte-identical data to what was written. Firmware load and CPU_RESET sequence boots PicoRV32.
+**Pass criterion:** All register R/W operations via RPi SPI0 match expected values. CHIP_ID reads `0xA7`. Extended firmware-load commands write and read back byte-identical CPU SRAM contents. Firmware load and CPU_RESET sequence boots PicoRV32.
 
 **Method:**
 - cocotb testbench simulates RPi SPI master; write and read back every defined register
-- Burst read of capture SRAM region (`0x40000`–`0x87FFF`)
-- Firmware load sequence: assert CPU_RESET, load test binary, de-assert, verify PicoRV32 fetches from 0x0000
+- Issue extended opcode `0x01` firmware-load writes into CPU SRAM window `0x000`–`0x0FFF`
+- Issue extended opcode `0x02` firmware-readback and compare against written bytes
+- Firmware load sequence: assert `CPU_RESET`, load test binary, de-assert, verify PicoRV32 fetches from `0x00000`
 
 ---
 
@@ -185,10 +186,14 @@ Connects `I_IN`/`Q_IN` to `I_OUT`/`Q_OUT` inside the SX1257 — validates the ro
 
 ### RF loopback (SX1257 §3.8.2)
 
+See [Frontend Calibration Procedure](../Frontend%20Calibration%20Procedure.md) for the full step-by-step procedure to derive `cal_j` from RF loopback or external common-tone measurements and program the `CAL` registers.
+
 | Test | Method | Pass criterion |
 | --- | --- | --- |
 | I/Q gain mismatch | Enable RF loopback; inspect decimator output spectrum | < 1 dB mismatch |
-| TX DC offset | Check FFT bin 0 from diagnostic capture | < −30 dBc |
+| TX DC offset | Check baseband bin 0 from diagnostic capture | < −30 dBc |
+| Inter-branch phase calibration | Follow calibration procedure Method B | Post-cal phase spread < 5° |
+| Inter-branch amplitude calibration | Follow calibration procedure Method A | Post-cal amplitude spread < 0.5 dB |
 
 ### AFE characterization before full-system integration
 
