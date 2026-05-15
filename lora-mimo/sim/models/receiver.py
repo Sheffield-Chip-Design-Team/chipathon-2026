@@ -1,41 +1,62 @@
-"""MRC receiver DSP chain (Stages 3–6 from the DSP Flow Equations).
+"""MRC receiver DSP chain.
 
-Stage 3 — Energy Detector:
-  See sim.stages for energy_detector
+This file contains two independent channel estimation paths:
 
-Stage 4 — FFT-based channel estimation (gr-lora_sdr style):
-  1. Fractional CFO via RCTSL: 2× zero-padded FFT on concatenated dechirped
-     preamble + quadratic correction around peak (Cui Yang et al.).
-  2. Time-domain CFO correction applied to all preamble samples.
-  3. Incoherent peak search on corrected signal (same bin for all antennas).
-  4. Coherent average: h_hat_j = mean_s D_j[k_peak] / M
+NON-FFT PATH (current ASIC architecture)
+-----------------------------------------
+Uses the training accumulator — see training_accumulator.py.
+  Stage 3 — SC preamble detection → sc_lock, timing_ref
+  Stage 4 — Training accumulator: Z_j = Σ raw_j[n]·conj(chirp_ref[n mod M])
+  Stage 5 — Weight computation from Z_j (MRC/EGC/SC/Bypass)
+  Stage 6 — Complex combining: y[n] = Σ_j w_j* · x_j[n]
 
-Stage 5a — Phase extraction (firmware):
-  φ_j = ∠ h_hat_j
-
-Stage 5b — Phase correction (RTL complex multiply):
-  x'_j[m] = x_j[m] · exp(-j·φ_j)
-
-Stage 5c — Real combining coefficient (firmware):
-  c_j = |h_hat_j| / (Σ_j |h_hat_j|² + N0)
-
-Stage 6 — MRC combining (RTL real MAC × 4):
-  y[m] = Σ_j  c_j · x'_j[m]
-
-Stage 7 — ALMMSE combining:
-  ŷ[n] = W · x[n] (2 output nodes)
+FFT PATH (legacy reference — not used in current ASIC)
+-------------------------------------------------------
+Retained for comparison and historical reference. Uses FFT-based channel
+estimation with RCTSL fractional CFO and coherent peak averaging.
+See planning/DSP Flow.md for why the FFT path was replaced.
 """
 
 import numpy as np
 from .stages import energy_detector
 from .fixed import quantize_q1_15
+from .training_accumulator import (
+    training_accumulate,
+    compute_weights as compute_weights_nonfft,
+)
 
 
 # ---------------------------------------------------------------------------
-# Stage 4 — FFT-based channel estimation
+# NON-FFT PATH — combining using training accumulator weights
+# ---------------------------------------------------------------------------
+
+def nonfft_combine(
+    rx_payload: np.ndarray,
+    w: np.ndarray,
+) -> np.ndarray:
+    """
+    Complex sample-by-sample combining using weights from compute_weights_nonfft().
+
+    y[n] = Σ_j  w_j* · x_j[n]   (matched filter / MRC inner product)
+
+    Parameters
+    ----------
+    rx_payload : (NR, n_samples) complex array
+    w          : (NR,) complex Q1.15 weights from compute_weights_nonfft()
+
+    Returns
+    -------
+    y : (n_samples,) combined signal
+    """
+    return np.sum(np.conj(w)[:, None] * rx_payload, axis=0)
+
+
+# ---------------------------------------------------------------------------
+# FFT PATH (legacy) — FFT-based channel estimation
 # ---------------------------------------------------------------------------
 
 def _cfo_frac_rctsl(rx_preamble: np.ndarray, M: int, N_sym: int) -> float:
+    # FFT PATH (legacy)
     """
     Fractional CFO estimation using the RCTSL algorithm (Cui Yang et al.),
     with incoherent multi-antenna combining.
@@ -92,7 +113,7 @@ def _cfo_frac_rctsl(rx_preamble: np.ndarray, M: int, N_sym: int) -> float:
 def estimate_channel(rx_preamble: np.ndarray, M: int, N_sym: int,
                      eps_sub: float = None) -> np.ndarray:
     """
-    Estimate per-antenna channel coefficients from N_sym preamble upchirps.
+    [FFT PATH — legacy] Estimate per-antenna channel from N_sym preamble upchirps.
 
     Algorithm (gr-lora_sdr style)
     ------------------------------
@@ -156,11 +177,11 @@ def estimate_channel(rx_preamble: np.ndarray, M: int, N_sym: int,
 
 def compute_weights(h_hat: np.ndarray, N0: float):
     """
-    Return per-antenna phase corrections φ and real combining coefficients c.
+    [FFT PATH — legacy] Return phase corrections φ and real combining coefficients c.
 
-    Matches PicoRV32 firmware (see PicoRV32 Integration.md):
-      denom = Σ_j (|H_j|² + N0)          (per-antenna N0, summed)
-      w_j   = H_j* / denom
+    N0-weighted denominator: denom = Σ_j (|H_j|² + N0)
+    For the non-FFT path use compute_weights_nonfft() from training_accumulator.py
+    which takes Z_j directly and does not require N0.
 
     Decomposed for the two-stage RTL path:
       phi_j = ∠H_j                        (Stage 5a — phase correction input)

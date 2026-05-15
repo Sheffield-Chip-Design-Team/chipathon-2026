@@ -22,11 +22,24 @@ class SchmidlCoxDetector:
     """
     Stage 3 — Schmidl-Cox preamble trigger.
 
-    The detector continuously dechirps the input, forms the planned
-    magnitude-squared Schmidl-Cox statistic, and asserts `sc_lock` once
-    `hits_req` consecutive symbol-pair checks pass threshold. The reported
-    `timing_ref` is back-calculated to the candidate preamble start; SC phase
-    is retained only as a diagnostic.
+    The detector dechirps the input, forms the magnitude-squared SC statistic,
+    and asserts `sc_lock` once `hits_req` consecutive symbol-pair checks pass
+    threshold. The reported `timing_ref` is back-calculated to the candidate
+    preamble start; SC phase is retained only as a diagnostic.
+
+    Implementation note — dechirp-cancel equivalence
+    -------------------------------------------------
+    This model dechirps before forming the SC autocorrelation. The hardware
+    implementation operates on raw samples WITHOUT dechirping. These are
+    identical because for a constant-amplitude LoRa chirp:
+
+        conj(chirp_ref[n mod M]) · chirp_ref[(n+M) mod M]
+        = conj(exp(jπ(n%M)²/M)) · exp(jπ(n%M)²/M)   [since (n+M)%M = n%M]
+        = 1
+
+    The chirp reference cancels exactly in the M-lag product, so the SC
+    statistic on dechirped samples equals that on raw samples. See
+    planning/blocks/Correlator Bank.md for the full derivation.
     """
     def __init__(
         self,

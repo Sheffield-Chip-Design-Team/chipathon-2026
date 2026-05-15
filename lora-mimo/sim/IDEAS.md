@@ -2,6 +2,12 @@
 
 Open ideas for future notebook cells, model extensions, or verification experiments.
 
+> **Note:** Most items below predate the switch to the non-FFT streaming frontend
+> (see `planning/Non-FFT LoRa Frontend Proposal.md`). Ideas that reference FFT peak
+> bins, capture SRAM, RCTSL, or sub-bin CFO correction apply to the legacy FFT path
+> only and are superseded by the training accumulator architecture. Items still
+> relevant to the current design are noted inline.
+
 ---
 
 ## In Progress
