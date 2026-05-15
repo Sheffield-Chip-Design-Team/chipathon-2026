@@ -75,26 +75,25 @@
 
 ---
 
-### Block 4 — FFT Engine
+### Block 4 — Training Accumulator + Weight Generation
 
-**Pass criterion:** Peak bin matches Python `np.fft.fft()` reference for all SF5–SF12 and all test symbols. Peak > noise floor + 20 dB at 0 dB input SNR.
+> **Non-FFT path:** FFT Engine test is not applicable. This block replaced by Training Accumulator and Weight Generation. See [Training Accumulator](blocks/Training%20Accumulator.md) and [Weight Generation](blocks/Weight%20Generation.md) for block-level verification tables.
 
-**Method:**
-- Inject dechirped tone for a known symbol value per SF
-- Exhaustive test SF7 (all 128 symbols)
-- Sampled test SF8–SF12 (every 8th symbol)
-- Sweep SNR to find minimum decoding level
+**Pass criterion (Training Accumulator):** `Z_j / n_acc` matches Python reference `h_j` within Q1.15 rounding on a noiseless channel. `training_done` asserts at the correct sample boundary. `n_acc` matches `(8 - SC_HITS_REQ - 1) × M`.
+
+**Pass criterion (Weight Generation):** Weights match Python reference for all four combining modes (MRC, EGC, SC, Bypass) to within ±2 LSB Q1.15. W_COMMIT pulses within 70,400 cycles of `training_done` at SF6/125 kHz.
 
 **Test matrix:**
 
 | Test | Pass criterion |
 | --- | --- |
-| All 128 symbols, SF7 | 100% correct bin |
-| SF12, symbol 0, 0 dB SNR | Correct bin |
-| SF12, symbol 0, −10 dB SNR | Correct bin |
-| Twiddle ROM stride correctness, all SFs | Peak bin matches numpy reference |
-| SRAM arbitration | No data corruption with PicoRV32 running simultaneously |
-| Latency | ≤ SF × 2^(SF−1) + 2^SF cycles from trigger to `symbol_valid` |
+| Noiseless single-path, SF6 | `Z_j / n_acc` matches `h_j` within rounding |
+| CFO immunity ±10 kHz | Weights correctly phase-aligned to h_j |
+| MRC all branches equal | Equal-magnitude weights, unit-norm sum |
+| EGC noiseless | \|w_j\| = 1, angle(w_j) = −angle(h_j) |
+| SC single strong branch | w_j = 1 on correct branch |
+| 8-bit saturation vs full-precision | SC lock timing unaffected at −10 dB SNR |
+| Strong signal saturation | SC lock and training accumulator degrade gracefully |
 
 ---
 

@@ -2,6 +2,17 @@
 
 The digital signal processing chain is receive-only. The ASIC sits between four SX1257 RF front-ends and an SX1302 LoRa baseband processor, performing multi-antenna combining before passing re-modulated bitstreams to the SX1302 for LoRa demodulation.
 
+> **Note — Non-FFT frontend direction.**
+> The pipeline below reflects the original FFT-based acquisition design (Schmidl-Cox trigger → 3-pass RCTSL FFT → PicoRV32 weight computation). Active architecture work is instead proceeding on a **non-FFT streaming frontend** — see [Non-FFT LoRa Frontend Proposal](Non-FFT%20LoRa%20Frontend%20Proposal.md).
+>
+> The FFT path is not used for the following reasons:
+> - The 3-pass RCTSL FFT requires ~128 KB of on-chip SRAM staging at SF12, which is incompatible with the available memory budget
+> - A streaming correlator-based approach (SC detection + preamble training accumulation) achieves the same outputs — timing, channel estimates, and combining weights — without any FFT staging SRAM
+> - With a fixed 8-symbol preamble, `timing_ref` from SC is sufficient to locate the packet boundary, removing the need for the SFD timing refiner that the FFT path previously provided
+> - CFO estimation is not required for MRC/EGC weight computation because common CFO cancels in the weight ratios; the SX1302 handles residual CFO during demodulation
+>
+> This document is retained as a reference for the original design intent and for the bypass / passthrough path, which is unchanged.
+
 Three operating modes share the same hardware:
 
 | Mode | Config | Combining | Output |

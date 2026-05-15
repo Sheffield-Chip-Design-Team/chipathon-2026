@@ -17,11 +17,10 @@ Collects interrupt sources from DSP blocks and routes them to PicoRV32 (internal
 
 | Source | Block | Description |
 | --- | --- | --- |
-| `corr_lock` | Correlator Bank / Packet Control FSM | Preamble detected — packet FSM entered `PREAMBLE_DETECTED` |
-| `h_ready` | FFT Engine / Packet Control FSM | H/N₀/eps_sub valid — firmware should compute W |
+| `corr_lock` | Correlator Bank / Packet Control FSM | Preamble detected — packet FSM entered `PREAMBLE_ACQ` |
+| `training_done` | Training Accumulator / Packet Control FSM | Preamble accumulation complete — firmware should compute W |
 | `W_missed_packet` | Packet Control FSM | W was not committed before packet completion; packet stayed in bypass |
-| `capture_done` | Baseband SRAM | Sample capture buffer full |
-| `capture_overflow` | Baseband SRAM | Capture buffer overflowed before host read |
+| `packet_done` | Packet Control FSM | FSM returned to IDLE (packet ended or timed out) |
 | `tx_prep` | TX_CTRL[0] register | Host requests TX preparation — disable RX antennas, switch SX1257s to TX |
 | `tx_done` | TX_CTRL[1] register | Host signals TX complete — restore SX1257s to RX, re-enable antennas |
 
@@ -32,10 +31,9 @@ Collects interrupt sources from DSP blocks and routes them to PicoRV32 (internal
 | Port | Direction | Width | Description |
 | --- | --- | --- | --- |
 | `corr_lock` | in | 1 | From correlator bank |
-| `h_ready` | in | 1 | From FFT / Packet Control FSM |
+| `training_done` | in | 1 | From Training Accumulator / Packet Control FSM |
 | `W_missed_packet` | in | 1 | From Packet Control FSM |
-| `capture_done` | in | 1 | From SRAM capture logic |
-| `capture_overflow` | in | 1 | From SRAM capture logic |
+| `packet_done` | in | 1 | From Packet Control FSM (FSM returned to IDLE) |
 | `irq_out` | out | 1 | Level-high IRQ to PicoRV32 |
 | `IRQ` | out | 1 | GPIO pad to RPi (active high) |
 | `wb_addr` | in | 8 | AHB-Lite address |
@@ -51,13 +49,15 @@ Collects interrupt sources from DSP blocks and routes them to PicoRV32 (internal
 
 ## Register (AHB-Lite and SPI mirror, read/clear)
 
+Mirrors `IRQ_STATUS` (`0x49`) and `IRQ_CLEAR` (`0x4A`) in the register map.
+
 | Bit | Source | Clear |
 | --- | --- | --- |
 | [0] | `corr_lock` | Write 1 to bit [0] |
-| [1] | `h_ready` | Write 1 to bit [1] |
+| [1] | `training_done` | Write 1 to bit [1] |
 | [2] | `W_missed_packet` | Write 1 to bit [2] |
-| [3] | `capture_done` | Write 1 to bit [3] |
-| [4] | `capture_overflow` | Write 1 to bit [4] |
+| [3] | `packet_done` | Write 1 to bit [3] |
+| [4] | reserved | — |
 | [5] | `tx_prep` | Write 1 to bit [5] |
 | [6] | `tx_done` | Write 1 to bit [6] |
 
@@ -82,8 +82,9 @@ The SPI-facing register map exposes the same bit layout at `IRQ_STATUS` (`0x49`)
 | Test | Method | Pass criterion |
 | --- | --- | --- |
 | corr_lock IRQ | Assert `corr_lock`; read WB register | Bit [0] set; `irq_out` high |
-| h_ready IRQ | Assert `h_ready`; read WB register | Bit [1] set; firmware W computation can start |
+| training_done IRQ | Assert `training_done`; read WB register | Bit [1] set; firmware W computation can start |
 | W missed IRQ | Assert `W_missed_packet`; read WB register | Bit [2] set; packet remains bypass |
+| packet_done IRQ | Assert `packet_done`; read WB register | Bit [3] set |
 | Clear IRQ | Write 1 to bit [0] | Bit [0] clears; `irq_out` low if no other source |
 | Multiple simultaneous | Assert all sources | All bits set; `irq_out` high |
 | Clear one, others remain | Clear only bit [1] | Bit [0] and [2] still set; `irq_out` still high |
@@ -93,8 +94,7 @@ The SPI-facing register map exposes the same bit layout at `IRQ_STATUS` (`0x49`)
 ## Related blocks
 
 - [Correlator Bank](Correlator%20Bank.md) — `corr_lock` source
-- [Packet Control FSM](Packet%20Control%20FSM.md) — packet-phase and W-missed sources
-- [FFT Engine](FFT%20Engine.md) — `h_ready` source
-- [Baseband SRAM](Baseband%20SRAM.md) — `capture_done/overflow` sources
+- [Training Accumulator](Training%20Accumulator.md) — `training_done` source
+- [Packet Control FSM](Packet%20Control%20FSM.md) — `W_missed_packet`, `packet_done` sources
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — internal IRQ target
 - [System Architecture](../System%20Diagram.md) — `IRQ` pad to RPi

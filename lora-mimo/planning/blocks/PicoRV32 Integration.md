@@ -13,7 +13,7 @@ PicoRV32 RV32IM soft-core CPU managing all timing-sensitive and algorithmic task
 
 **Bus decision.** The project bus is now `AHB-Lite`. PicoRV32 is kept as the CPU, so the master side is a custom implementation rather than a native Wishbone integration.
 
-**Why RV32IM (not RV32I):** The ALMMSE weight computation requires a 2×2 complex matrix inversion. The closed-form determinant and reciprocal involve 32-bit multiplies — hardware MUL/DIV (the M extension) reduces the weight computation from ~1000 cycles (software multiply) to ~50 cycles.
+**Why RV32IM (not RV32I):** MRC weight computation requires computing `S = Σ|H_j|²` and then `w_j = conj(H_j) / S` — a 32-bit integer division plus four complex multiply-accumulates. Hardware MUL/DIV (the M extension) reduces this from ~1000 cycles to ~50 cycles. EGC normalisation uses the same multiply path.
 
 ---
 
@@ -21,39 +21,38 @@ PicoRV32 RV32IM soft-core CPU managing all timing-sensitive and algorithmic task
 
 | Task | Trigger | Latency budget |
 | --- | --- | --- |
-| MRC weight computation | FFT `h_ready` (NT=1) | << 1 LoRa symbol (~32 ms at SF12) |
-| ALMMSE weight computation | FFT `h_ready` (NT=2) | << 1 LoRa symbol |
+| Weight computation (MRC/EGC/SC/Bypass) | `training_done` IRQ (`IRQ_TRAINING_DONE`) | < 2.2 ms at SF6/125 kHz (~70,400 cycles) |
 | TX preparation (RX→TX) | `tx_prep` IRQ from TX_CTRL[0] | < 1 ms (LoRaWAN RX1 budget = 1 s) |
 | TX restore (TX→RX) | `tx_done` IRQ from TX_CTRL[1] | < 1 ms |
-| AGC loop | Per-packet energy update | < 1 packet |
-| Mode auto-switch | NT=2 preamble pair detect | Immediate — IRQ-driven |
+| AGC loop | `corr_lock` IRQ (`IRQ_CORR_LOCK`) | < 1 packet |
 | SX1257 init on power-up | Startup | Before first RX |
 
-### MRC weight computation (NT=1)
+### Weight computation
+
+Triggered by `IRQ_TRAINING_DONE`. Reads Z_j scaled readback registers (`0x70`–`0x8F`), computes combining weights for the active mode, writes W_SHADOW (`0x90`–`0xAF`), then pulses W_COMMIT.
+
+Z_j are exposed as int32 (right-shifted by `Z_SHIFT` from register `0xB3`). The common shift preserves relative magnitudes and phases — no division by n_acc needed.
+
 ```c
-// w_j = H_j* / Σ_k(|H_k|² + N0_k)   — per-antenna N0 for correct weighting
-// under per-antenna AGC, each antenna may be at a different gain so N0 differs
-// H is 4x1 complex int16 Q1.15; N0[4] are per-antenna int16
-int32 denom = 0;
+// Read Z_j_scaled (int32 I+Q per branch, big-endian) from 0x70-0x8F
+// Apply calibration: H_j = Z_j * conj(cal_j)   (complex multiply, Q1.15 cal)
+// Then compute weights by mode:
+
+// MRC: w_j = conj(H_j) / S,  S = Σ_k |H_k|²
+int64 S = 0;
 for (int j = 0; j < 4; j++)
-    denom += (int32)H_re[j]*H_re[j] + (int32)H_im[j]*H_im[j] + N0[j];
+    S += (int64)H_re[j]*H_re[j] + (int64)H_im[j]*H_im[j];
 for (int j = 0; j < 4; j++) {
-    W_re[j] = (int16)((int32)H_re[j] * 32767 / denom);  // Q1.15 normalise
-    W_im[j] = (int16)(-(int32)H_im[j] * 32767 / denom); // conjugate
+    W_re[j] = (int16)((int64)H_re[j] * 32767 / S);   // Q1.15 normalise
+    W_im[j] = (int16)(-(int64)H_im[j] * 32767 / S);  // conjugate
 }
+
+// EGC: w_j = conj(H_j) / |H_j|  (unit magnitude, conjugate phase)
+// SC:  w_j = 1 for argmax_j |H_j|², 0 for others
+// Bypass: w_j = 1 for lowest enabled antenna, 0 for others
 ```
 
-### ALMMSE weight computation (NT=2)
-```c
-// W = (H^H * H + N0*I)^-1 * H^H
-// H is 4x2 complex; use closed-form 2x2 inverse
-// HH = H^H * H  (2x2 Gram matrix)
-// HH^-1 = [[d,-b],[-c,a]] / (ad-bc)  (closed-form)
-// W = HH^-1 * H^H
-// ~20 complex MACs + 1 division (RV32IM DIV opcode)
-```
-
-See [DSP Flow §Stage 6](../DSP%20Flow.md) for full equations.
+After writing W_SHADOW and pulsing W_COMMIT, the Packet Control FSM promotes W_SHADOW → W_ACTIVE at the next `safe_switch` (IDLE boundary). See [Weight Generation](Weight%20Generation.md) for full arithmetic detail.
 
 ### TX preparation (RX → TX)
 
@@ -140,21 +139,21 @@ The design assumes the channel is constant across one packet — `h_hat` estimat
 
 ---
 
-### H and N₀ channel estimate averaging (EMA)
+### Channel estimate averaging (EMA)
 
-Both H and N₀ are estimated once per preamble by the correlator. On a stable channel this is fine; on a slowly varying channel, averaging H and N₀ across packets reduces noise on W and stabilises ALMMSE separation.
+Z_j is estimated once per preamble. On a stable channel this is sufficient; on a slowly varying channel, averaging Z_j across packets reduces noise on the channel estimate and stabilises weights.
 
-Firmware implements an exponential moving average in DMEM — no RTL changes required:
+Firmware implements an exponential moving average of the normalised channel estimate H_j (= Z_j_scaled, the int32 right-shifted value from registers) in DMEM — no RTL changes required:
 
 ```c
-// DMEM: 32 bytes for H_prev, 8 bytes for N0_prev
-int16 H_prev_re[4][2], H_prev_im[4][2];
-uint16_t N0_prev[4];
+// DMEM: 32 bytes for H_prev (int32 I+Q per branch)
+int32_t H_prev_re[4], H_prev_im[4];
 
-// IRQ_STATUS bits:
+// IRQ_STATUS bits (non-FFT path):
 #define IRQ_CORR_LOCK        (1u << 0)
-#define IRQ_H_READY          (1u << 1)
+#define IRQ_TRAINING_DONE    (1u << 1)
 #define IRQ_W_MISSED_PACKET  (1u << 2)
+#define IRQ_PACKET_DONE      (1u << 3)
 
 void irq_handler() {
     uint8_t irq = read_reg(IRQ_STATUS);
@@ -164,38 +163,34 @@ void irq_handler() {
         clear_irq(IRQ_CORR_LOCK);
     }
 
-    if (irq & IRQ_H_READY) {
+    if (irq & IRQ_TRAINING_DONE) {
         // Saturation check: if any antenna was saturating, discard this packet
         bool saturated = false;
         for (int n = 0; n < 4; n++)
             if (read_energy(n) > AGC_SAT_GUARD) { saturated = true; break; }
 
         if (!saturated) {
-            read_H_registers(H_new_re, H_new_im);   // from 0x70-0x8F
-            read_N0_registers(N0_new);              // from 0xB0-0xB7
+            read_Zj_registers(H_new_re, H_new_im);  // Z_j_scaled from 0x70-0x8F
 
-            // EMA: reset if any antenna's gain changed (H and N0 scale with gain)
+            // EMA: reset if any antenna's gain changed (Z_j scales with gain)
             if (ema_reset_pending) {
-                H_prev = H_new;
-                N0_prev = N0_new;
+                memcpy(H_prev_re, H_new_re, sizeof(H_prev_re));
+                memcpy(H_prev_im, H_new_im, sizeof(H_prev_im));
                 ema_reset_pending = false;
             } else {
-                // H_avg = H_prev + (H_new - H_prev) >> H_ALPHA_SHIFT
-                // N0_avg = N0_prev + (N0_new - N0_prev) >> N0_ALPHA_SHIFT
-                for each element:
-                    H_avg = H_prev + ((H_new - H_prev) >> H_ALPHA_SHIFT);
-                for each antenna:
-                    N0_avg = N0_prev + ((N0_new - N0_prev) >> N0_ALPHA_SHIFT);
-                H_prev = H_avg;
-                N0_prev = N0_avg;
+                // H_avg = H_prev + (H_new - H_prev) >> ALPHA_SHIFT
+                for (int j = 0; j < 4; j++) {
+                    H_prev_re[j] += (H_new_re[j] - H_prev_re[j]) >> ALPHA_SHIFT;
+                    H_prev_im[j] += (H_new_im[j] - H_prev_im[j]) >> ALPHA_SHIFT;
+                }
             }
 
-            compute_W(H_avg, N0_avg);
-            write_W_shadow_registers(W);            // to 0x90-0xAF
+            compute_W(H_prev_re, H_prev_im);  // uses active combining mode
+            write_W_shadow_registers(W);       // to 0x90-0xAF
             write_reg(W_CTRL, W_COMMIT);
         }
 
-        clear_irq(IRQ_H_READY);
+        clear_irq(IRQ_TRAINING_DONE);
     }
 
     if (irq & IRQ_W_MISSED_PACKET) {
@@ -205,59 +200,10 @@ void irq_handler() {
 }
 ```
 
-`ALPHA_SHIFT` parameters are firmware compile-time constants. Synchronizing the averaging of H and N₀ ensures the ALMMSE formula uses an "age-matched" set of parameters, preventing weight jitter. To disable averaging, set `ALPHA_SHIFT=0`.
+`ALPHA_SHIFT` is a firmware compile-time constant. To disable averaging set `ALPHA_SHIFT=0`. No N0 averaging is needed — the non-FFT path does not estimate per-branch noise variance.
 
-**Timing:** MRC ~50 cycles, ALMMSE ~100 cycles at 32 MHz. After correlator lock there are sync word + header symbols before data (~3 ms at SF7) — margin is >1000×.
+**Timing:** Weight computation (MRC path including 1/S division) ~50 cycles at 32 MHz. Budget from `training_done` to payload start is ~70,400 cycles at SF6/125 kHz — margin >1000×.
 
-### Pre-boot DELTA_F calibration (first-packet fix)
-
-On first contact with a node, the correlator integrates at the programmed `DELTA_F`. At SF7, a ±20 ppm crystal error puts the node ~17 bins off — the correlator produces a degraded H on the first packet. Fix: RPi writes a measured or previously stored `DELTA_F` before releasing `CPU_RESET`:
-
-```
-RPi startup sequence:
-  1. Write CPU_RESET=1
-  2. Load firmware via SPI burst
-  3. Write DELTA_F_HI/LO with last-known node frequency offset
-     (from prior session, node registration database, or manufacturer spec)
-  4. Write CPU_RESET=0
-```
-
-`DELTA_F` is writable at `0x20`/`0x21` and takes effect immediately on the correlator. No RTL changes required. For a fresh deployment with no prior data, use the node's nominal Δf; drift compensation will correct it within the first few packets.
-
-### Periodic DELTA_F drift compensation
-
-Node crystal drift shifts the actual carrier away from the programmed Δf over time (temperature-driven; timescale minutes). Firmware corrects this by periodically reading `FFT_PEAK_BIN_A/B` after each FFT run:
-
-```c
-static uint16_t delta_f_hz   = DELTA_F_INIT_HZ;  // loaded from register at boot
-static uint16_t packet_count = 0;
-
-// Called from irq_handler() after FFT completes:
-void drift_compensation() {
-    if (++packet_count % DRIFT_COMP_INTERVAL != 0) return;
-
-    // Node 1 (+Δf)
-    uint16_t k_a    = (read_reg(FFT_PEAK_BIN_A_HI) << 8) | read_reg(FFT_PEAK_BIN_A_LO);
-    uint16_t k_prog = (uint32_t)delta_f_hz * (1 << SF) / BW_HZ;
-    int16_t  err_a  = (int16_t)k_a - (int16_t)k_prog;
-    delta_f_hz     += (int32_t)err_a * BW_HZ / (1 << SF);
-
-    // NT=2: node 2 (−Δf) — bin should be M − k_a; verify independently
-    if (nt_mode == 2) {
-        uint16_t k_b   = (read_reg(FFT_PEAK_BIN_B_HI) << 8) | read_reg(FFT_PEAK_BIN_B_LO);
-        uint16_t k_b_expected = (1 << SF) - k_a;
-        int16_t  err_b = (int16_t)k_b - (int16_t)k_b_expected;
-        // Log err_b; large value indicates nodes are not at symmetric offsets
-    }
-
-    write_reg(DELTA_F_HI, delta_f_hz >> 8);
-    write_reg(DELTA_F_LO, delta_f_hz & 0xFF);
-}
-```
-
-`DRIFT_COMP_INTERVAL` — every 10 packets is conservative; every packet is safe (drift per packet << 1 bin). No RTL changes required.
-
-**NT=2 note:** `DELTA_F` encodes the offset of node 1. Node 2 is symmetric at `M − k₁`. If `err_b` is consistently non-zero, the two nodes are not symmetrically placed; firmware can log this for the host but cannot correct it (the nodes' transmit frequencies are outside ASIC control).
 
 ### AGC loop
 
@@ -348,30 +294,6 @@ void agc_update() {
 
 ---
 
-### FFT-based H estimation (post-silicon fallback)
-
-If correlator H estimation is unreliable on silicon, firmware reads the complex H directly from the FFT H output region in Baseband SRAM (`0x07FE0`–`0x07FFF`, mapped at AHB-Lite address `0x207FE0`):
-
-```c
-// After FFT completes (fft_done IRQ or polling):
-void use_fft_h() {
-    uint32_t base = 0x2007FE0;  // 0x20000 (WB SRAM base) + 0x07FE0 (FFT H output)
-    for (int j = 0; j < 4; j++) {
-        H_re[j][0] = sram_read16(base + j*4 + 0);  // antenna j, node 1, I
-        H_im[j][0] = sram_read16(base + j*4 + 2);  //                    Q
-    }
-    if (nt_mode == 2) {
-        for (int j = 0; j < 4; j++) {
-            H_re[j][1] = sram_read16(base + 0x10 + j*4 + 0);  // node 2
-            H_im[j][1] = sram_read16(base + 0x10 + j*4 + 2);
-        }
-    }
-    // H is now frequency-offset corrected; proceed with W computation
-}
-```
-
-Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORRELATOR`. Default is `CORRELATOR`. No RTL changes needed for either path.
-
 ---
 
 ## Memory map
@@ -381,7 +303,6 @@ Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORREL
 | `0x00000` | IMEM (instruction) | 32 KB | Loaded by host via SPI; PicoRV32 fetches from here |
 | `0x08000` | DMEM (data/stack) | 32 KB | Separate OpenRAM macro |
 | `0x10000` | AHB-Lite peripherals | — | Register bank, SPI master, IRQ, SWD |
-| `0x20000` | Baseband SRAM | 544 KB | Shared with FFT engine via arbiter |
 
 ---
 
@@ -392,15 +313,12 @@ Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORREL
 | Register bank | `0x10000` | All ASIC config/status registers |
 | SPI master | `0x10100` | SX1257 register writes |
 | IRQ controller | `0x10200` | IRQ source read/clear |
-| Baseband SRAM arbiter | `0x20000`+ | Direct-mapped to SRAM (with arbiter) |
 
 ---
 
 ## Implementation notes
 
 **PicoRV32 IP source.** Use the upstream PicoRV32 repo (Clifford Wolf). Enable `ENABLE_MUL`, `ENABLE_DIV`, `ENABLE_IRQ`. Disable `ENABLE_FAST_MUL` to save gates (iterative MUL is fine for firmware latency budget).
-
-**SRAM arbitration.** PicoRV32 and FFT engine share the Baseband SRAM. A simple priority arbiter grants the bus: FFT has priority during COMPUTE phase; PicoRV32 stalls (AHB-Lite wait-state) until granted. IMEM and DMEM are separate macros — no contention with FFT.
 
 **Firmware load flow:**
 ```
@@ -410,7 +328,7 @@ Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORREL
 4. PicoRV32 fetches from 0x00000; executes SX1257 init, then waits for IRQ
 ```
 
-**IRQ.** Schmidl-Cox lock arms capture/FFT, but W computation starts from the FFT `h_ready` IRQ. Firmware reads H/N₀ from registers, computes W, writes `W_SHADOW`, then asserts the W commit strobe. Hardware copies `W_SHADOW` into `W_ACTIVE` atomically at the next idle boundary and sets `W_valid`. The live combiner falls back to the selected bypass antenna until `W_valid` is set. If firmware finishes while a packet is active, it leaves that packet in bypass and commits W for the next packet.
+**IRQ.** Schmidl-Cox lock fires `IRQ_CORR_LOCK` (AGC). Training accumulator completion fires `IRQ_TRAINING_DONE` — this is the W computation trigger. Firmware reads Z_j_scaled from registers (`0x70`–`0x8F`), computes W, writes `W_SHADOW` (`0x90`–`0xAF`), then asserts the W commit strobe. Hardware copies `W_SHADOW` into `W_ACTIVE` atomically at the next idle boundary and sets `W_valid`. The live combiner falls back to the selected bypass antenna until `W_valid` is set. If firmware finishes while a packet is active, it leaves that packet in bypass and commits W for the next packet.
 
 ---
 
@@ -419,21 +337,23 @@ Firmware switch: compile with `#define H_SOURCE FFT` vs `#define H_SOURCE CORREL
 | Test | Method | Pass criterion |
 | --- | --- | --- |
 | Firmware load + boot | Load minimal test binary via SPI; monitor WB bus | CPU fetches from 0x00000 after CPU_RESET=0 |
-| MRC weight computation | Pre-load H/N₀; read back W after IRQ | W matches Python `H* / (‖H‖²+N0)` to ±2 LSB |
-| ALMMSE weight computation | Pre-load 4×2 H/N₀; read back W | W matches Python closed-form to ±2 LSB |
+| MRC weight computation | Pre-load Z_j_scaled registers; assert IRQ_TRAINING_DONE | W matches Python `H* / Σ\|H\|²` to ±2 LSB |
+| EGC weight computation | Pre-load Z_j_scaled registers | \|w_j\| = 1, angle(w_j) = −angle(h_j) |
+| SC weight computation | Pre-load Z_j with one dominant branch | w_j = 1 on correct branch, 0 elsewhere |
 | AGC loop | Static channel; vary SX1257 gain via WB | Gain converges within 3 packets |
+| EMA reset on gain change | Trigger AGC step; check ema_reset_pending | Next packet seeds H_prev = H_new, skips blend |
 | AHB-Lite bus | Back-to-back peripheral accesses | No missed ack; correct data |
-| SRAM arbitration | Run firmware + FFT simultaneously | No data corruption; CPU stalls correctly |
 
 ---
 
 ## Related blocks
 
 - [AHB-Lite Bus](AHB-Lite%20Bus.md) — interconnect
-- [Baseband SRAM](Baseband%20SRAM.md) — shared memory
 - [SPI Master](SPI%20Master.md) — SX1257 config
-- [IRQ Controller](IRQ%20Controller.md) — `h_ready`, packet, and TX IRQs
+- [IRQ Controller](IRQ%20Controller.md) — `training_done`, `corr_lock`, and TX IRQs
 - [Packet Control FSM](Packet%20Control%20FSM.md) — packet phase, safe W commit, W missed status
-- [FFT Engine](FFT%20Engine.md) — H/N₀/eps_sub source
+- [Training Accumulator](Training%20Accumulator.md) — Z_j source; triggers `IRQ_TRAINING_DONE`
+- [Weight Generation](Weight%20Generation.md) — weight computation detail (HW FSM option)
 - [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — W register target
+- [Register Map Delta - Non-FFT](../Register%20Map%20Delta%20-%20Non-FFT.md) — Z_j registers, training diagnostics
 - [Register Map](../Register%20Map.md) — `CPU_RESET` at `0x02`

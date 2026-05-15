@@ -91,6 +91,12 @@ Properties:
 - proportional to received power before gain control
 - latched at correlator lock so all later firmware reads are packet-consistent
 
+**Non-FFT path: energy tap point must be full-precision decimator output.**
+
+In the non-FFT frontend, the FRONTEND_BUF writes 8-bit *saturated* samples to SRAM. If the energy measurement reads from SRAM rather than the decimator, strong signals that are being clamped to ±127 will appear at lower energy than they actually are — the saturation hides the true signal level from AGC.
+
+The energy measurement must tap the **full-precision samples from the decimator output** (the same point used by the training accumulator), before the 8-bit saturation applied at the SRAM write path. This ensures AGC sees the true received power and can correctly step down gain when a strong signal arrives.
+
 ---
 
 ## Control policy
@@ -175,18 +181,18 @@ Gain changes do not apply inside the current packet.
 
 That matters for consistency:
 
-- `H` and `N0` are estimated from one packet under one gain setting
+- `Z_j` (non-FFT path) or `H/N0` (FFT path) are estimated from one packet under one gain setting
 - W is computed from those packet-consistent values
-- the next packet may use a different gain, and therefore a new `H`
+- the next packet may use a different gain, and therefore a new `Z_j`
 
-Because `H` scales with gain, gain changes invalidate cross-packet EMA smoothing.
+Because `Z_j` scales with gain, gain changes invalidate cross-packet smoothing of channel estimates.
 
 Current rule:
 
 - if any antenna gain changed, set `ema_reset_pending = true`
-- on the following packet, skip EMA accumulation and seed from the new estimate directly
+- on the following packet, skip any cross-packet accumulation and seed from the new estimate directly
 
-This prevents averaging `H` values measured under incompatible gain states.
+This prevents averaging channel estimates measured under incompatible gain states.
 
 ---
 

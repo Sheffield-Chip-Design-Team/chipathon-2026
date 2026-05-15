@@ -1,50 +1,78 @@
 # Schmidl-Cox Preamble Detector
 
-RX path stage 3. See [DSP Flow](../DSP%20Flow.md) for context.
+RX path block (non-FFT frontend). See [Non-FFT LoRa Frontend Proposal](../Non-FFT%20LoRa%20Frontend%20Proposal.md) and [DSP Flow](../DSP%20Flow.md) for context.
 
 **Owner:** TBD
-**Status:** Simplified "Low-Complexity Searcher" architecture
+**Status:** Updated for non-FFT path
 
 ---
 
 ## Background
 
-Since the **FFT Engine (Stage 4)** now provides high-precision CFO estimation via the RCTSL algorithm, the Schmidl-Cox block has been simplified to a pure "trigger" block. Its primary role is to monitor the sample stream continuously and detect the preamble boundary to wake up the more expensive downstream stages.
+In the non-FFT frontend, the SC block has two roles:
 
-The **Schmidl-Cox autocorrelator** provides timing/CFO-immune detection by correlating two adjacent dechirped symbols. 
+1. **Packet detection and timing.** Detect the LoRa preamble and produce `sc_lock` and `timing_ref`. With a fixed 8-symbol preamble, `timing_ref` alone is sufficient to locate the full packet — no downstream FFT or sync/downchirp refiner is needed.
+
+2. **CFO diagnostic export.** Export the per-branch complex correlator outputs `c_j` and the pooled sum `C_pool`. These are not used in the weight computation path (common CFO cancels in the weight ratios) but are exported as diagnostic registers for bring-up and characterisation.
+
+SC is no longer a trigger for a downstream FFT stage. It is the terminal acquisition block.
 
 **Reference implementation:** rpp0/gr-lora, `detect_preamble_autocorr()`, `decoder_impl.cc:340`.
 
 ---
 
+## Why dechirping is not needed
+
+The SC statistic correlates two adjacent symbol windows of dechirped samples:
+
+```
+c_j = Σ_n D_j[n] · conj(D_j[n-M])
+```
+
+where `D_j[n] = raw_j[n] · conj(chirp_ref[n mod M])`.
+
+Expanding:
+
+```
+c_j = Σ_n raw_j[n] · conj(chirp_ref[n mod M])
+          · conj(raw_j[n-M]) · chirp_ref[(n-M) mod M]
+    = Σ_n raw_j[n] · conj(raw_j[n-M])
+          · conj(chirp_ref[n mod M]) · chirp_ref[n mod M]
+    = Σ_n raw_j[n] · conj(raw_j[n-M]) · |chirp_ref[n mod M]|²
+```
+
+Since the LoRa chirp has constant amplitude, `|chirp_ref[n mod M]|² = 1` for all n. The chirp reference cancels exactly. SC therefore operates identically on raw samples as on dechirped samples.
+
+**The dechirp sub-block is not needed in this block.** SC receives raw DC-removed samples directly from the Frontend Buffer Controller and computes:
+
+```
+c_j = Σ_n current_j[n] · conj(delayed_j[n])
+```
+
+where `current_j[n]` and `delayed_j[n]` are the current and M-sample-delayed raw samples provided by the FRONTEND_BUF.
+
+---
+
 ## Function
 
-For each received antenna `j` and each consecutive symbol pair `(s, s+1)`, the block maintains a sliding-window complex correlation:
+For each receive branch `j`, SC maintains a sliding-window complex autocorrelation over adjacent M-sample windows:
 
 ```
-SC_j[s] = Σ_n  D_j[s][n] · D_j[s+1][n]*
+c_j = Σ_{n=0}^{M-1} current_j[n] · conj(delayed_j[n])
 ```
 
-where `D_j[s][n]` is the dechirped input.
+### Detection statistic
 
-**Detection Statistic (Magnitude-Squared):**
-
-To avoid expensive hardware square roots or CORDIC-based phase extraction, the block calculates the magnitude-squared statistic and compares it against a normalized threshold using multiplication (avoiding division).
-
-For multi-antenna operation, the antenna combine after correlation is explicitly **incoherent**:
+Incoherent combination across branches (no cross-branch phase alignment assumed):
 
 ```
-Mag_SC = Σ_j |SC_j[s]|²
-Energy_Ref = Σ_j E_j[s] · E_j[s+1]
+Mag_SC    = Σ_j |c_j|²
+Energy_Ref = Σ_j E_j_curr · E_j_del
 ```
 
-This is intentional:
+where `E_j_curr = Σ |current_j[n]|²` and `E_j_del = Σ |delayed_j[n]|²`.
 
-- each antenna performs a true complex Schmidl-Cox correlation locally
-- the detector does **not** assume cross-antenna phase alignment
-- a weak or phase-rotated antenna cannot cancel a strong antenna during the trigger decision
-
-**Lock condition:**
+Lock condition (multiplication form, avoids division):
 
 ```
 Mag_SC  ≥  (θ_SC)² · Energy_Ref
@@ -52,219 +80,190 @@ Mag_SC  ≥  (θ_SC)² · Energy_Ref
 
 `θ_SC` is the programmable detection threshold (default 0.90).
 
-**Outputs:**
-- `sc_lock` — asserted when Λ exceeds threshold for the configured number of consecutive symbol pairs
-- `timing_ref` — estimated preamble-start sample index in `iq_valid` units; used by the capture controller and Stage 4
+### CFO diagnostic
 
-`timing_ref` is **not** the lock-edge sample counter. With `N_hit` consecutive Schmidl-Cox hits required, the detector has already consumed roughly `N_hit + 1` symbols from the candidate preamble start before it can assert `sc_lock`. The block therefore back-calculates the start index:
+After lock, the pooled correlator sum provides a coarse CFO estimate:
 
 ```
-timing_ref = first_hit_candidate_sample
-// equivalently, for symbol-rate hit checks:
-// timing_ref = lock_sample_count - (N_hit + 1)*M + 1
+C_pool = Σ_j c_j
+ω̂_diag = -angle(C_pool) / M
 ```
 
-This definition makes the handoff deterministic: downstream capture uses `timing_ref` as the preamble origin, then adds pre/post guard as needed.
+This is exported as a diagnostic only. It is not used in weight computation — common CFO cancels in the MRC/EGC weight ratios and the SX1302 handles residual CFO downstream.
 
-### Signal Flow Sketch
+### Outputs
 
-The Schmidl-Cox block is best viewed as a dechirped adjacent-window autocorrelator:
+- `sc_lock` — asserted when detection statistic exceeds threshold for `SC_HITS_REQ` consecutive symbol pairs
+- `timing_ref` — estimated preamble-start sample index (back-calculated from lock event)
+- `c_j[3:0]` — per-branch complex correlator value at lock (diagnostic)
+- `C_pool` — pooled complex correlator sum at lock (diagnostic)
+- `cfo_diag` — coarse CFO estimate in rad/sample (diagnostic register only)
 
-```text
-rx_iq
-  -> dechirp with downchirp reference
-  -> split into adjacent M-sample windows
-       win_a = D[d : d+M]
-       win_b = D[d+M : d+2M]
-  -> per-antenna correlation
-       SC_j[d] = Σ_n win_a[n] * conj(win_b[n])
-  -> per-antenna energy
-       E1_j[d] = Σ_n |win_a[n]|^2
-       E2_j[d] = Σ_n |win_b[n]|^2
-  -> combine antennas
-       Mag_SC[d]     = Σ_j |SC_j[d]|^2
-       Energy_Ref[d] = Σ_j E1_j[d] * E2_j[d]
-  -> threshold compare
-       hit[d] = (Mag_SC[d] >= θ_SC^2 * Energy_Ref[d])
-  -> consecutive-hit counter (`SC_HITS_REQ`)
-  -> `sc_lock`
-  -> timing-ref back-calculator
-  -> `timing_ref`
+### Timing back-calculation
+
+`timing_ref` is not the lock-edge sample counter. With `N_hit` consecutive hits required, the detector has consumed approximately `N_hit + 1` symbols before asserting lock. The back-calculation is:
+
+```
+timing_ref = lock_sample_count - (N_hit + 1) · M + 1
 ```
 
-Interpretation:
+With a fixed 8-symbol preamble and `SC_HITS_REQ = 2`, SC locks after seeing symbols 2–3. `timing_ref` points to symbol 0. The training accumulator uses `timing_ref` to identify symbol boundaries for all 8 preamble symbols.
 
-- It is an autocorrelation-style detector because it compares one dechirped symbol window against the next dechirped symbol window.
-- It is not a single-bin frequency-tuned matched filter, so constant packet CFO mainly rotates the correlation phase instead of collapsing the detection magnitude.
-- Antenna combining is incoherent after the per-antenna correlations, so the trigger remains robust even when branch phases differ.
-- Its role is coarse packet detection and coarse timing. Final `eps_sub` and refined timing come later from the FFT/RCTSL stage.
+**Timing accuracy:** ±2–3 samples at SF6 (M=64). No downstream refiner corrects this — it is a known limitation of the non-FFT path. For next-packet weight application this is acceptable; the SX1302 performs its own fine timing recovery on the combined output stream.
+
+---
+
+## Signal Flow
+
+```
+FRONTEND_BUF
+  current_j[n], delayed_j[n]  (raw DC-removed samples, 8-bit saturated)
+        |
+        v
+  Per-branch accumulator (over M samples)
+        c_j     = Σ_n current_j[n] · conj(delayed_j[n])    [complex, int32]
+        E_j_curr = Σ_n |current_j[n]|²                      [int32]
+        E_j_del  = Σ_n |delayed_j[n]|²                      [int32]
+        |
+        v
+  Incoherent combine
+        Mag_SC     = Σ_j |c_j|²          [int64]
+        Energy_Ref = Σ_j E_j_curr · E_j_del  [int64]
+        |
+        v
+  Threshold compare
+        hit = (Mag_SC >= θ_SC² · Energy_Ref)
+        |
+        v
+  Hit counter / lock FSM
+        sc_lock, timing_ref
+        |
+        v
+  CFO diagnostic latch
+        C_pool = Σ_j c_j  (latched at lock)
+        cfo_diag = -angle(C_pool) / M
+```
 
 ---
 
 ## Interface
 
 | Port | Direction | Width | Rate | Description |
-| --- | --- | --- | --- | --- |
-| `iq_i[3:0]` | in | 4×8 signed | $f_s$ | I from decimators |
-| `iq_q[3:0]` | in | 4×8 signed | $f_s$ | Q from decimators |
-| `iq_valid` | in | 1 | $f_s$ | Master sample strobe — used as **Clock Enable** |
-| `sf` | in | 3 | static | Spreading factor; from `SF_CFG` register |
-| `sc_thr` | in | 16 unsigned | static | Detection threshold θ_SC (Q1.15); from `SC_THR` register |
+|---|---|---|---|---|
+| `clk` | in | 1 | 32 MHz | System clock |
+| `rst_n` | in | 1 | — | Active-low reset |
+| `iq_valid` | in | 1 | f_s | Sample strobe from decimator — used as clock enable |
+| `current_j[3:0]` | in | 4×2×8 | f_s | Current raw samples from FRONTEND_BUF (I+Q per branch, 8-bit saturated) |
+| `delayed_j[3:0]` | in | 4×2×8 | f_s | M-delayed raw samples from FRONTEND_BUF (I+Q per branch, 8-bit saturated) |
+| `delayed_valid` | in | 1 | f_s | FRONTEND_BUF delayed sample valid (gated until buffer has ≥ M samples) |
+| `sf` | in | 3 | static | Spreading factor; sets M = 2^SF |
+| `sc_thr` | in | 16 | static | Detection threshold θ_SC (Q1.15); from `SC_THR` register |
 | `sc_hits_req` | in | 2 | static | Consecutive hits required for lock; from `SC_HITS_REQ` register |
-| `clk_32m` | in | — | 32 MHz | Master clock |
-| `rst_n` | in | — | — | Active-low reset |
-| `sc_lock` | out | 1 | per packet | Preamble detected; arms the guarded capture-completion FSM |
+| `sc_lock` | out | 1 | per packet | Preamble detected |
 | `timing_ref` | out | 32 | per packet | Estimated preamble-start sample index in `iq_valid` units |
-| `sc_stat` | out | 16 | per symbol | Current Λ[s] value (Q4.12 fixed-point) |
-| `sc_hit_dbg` | out | 1 | per symbol | Debug: current threshold-compare result before hit counting |
-| `sc_hit_count_dbg` | out | 2 | per symbol | Debug: current consecutive-hit counter state |
-| `sc_first_hit_dbg` | out | 32 | per packet | Debug: sample-count snapshot at first qualifying hit |
-| `sc_lock_sample_dbg` | out | 32 | per packet | Debug: sample-count snapshot when `sc_lock` asserts |
+| `c_j[3:0]` | out | 4×2×32 | per lock | Per-branch complex correlator at lock (I+Q, int32) — diagnostic |
+| `C_pool` | out | 2×32 | per lock | Pooled complex correlator sum (I+Q, int32) — diagnostic |
+| `cfo_diag` | out | 16 | per lock | Coarse CFO estimate in rad/sample (Q1.15) — diagnostic register |
+| `sc_stat` | out | 16 | per symbol | Current detection statistic Λ (Q4.12) |
+| `sc_hit_dbg` | out | 1 | per symbol | Debug: raw threshold-compare result |
+| `sc_hit_count_dbg` | out | 2 | per symbol | Debug: consecutive-hit counter state |
+| `sc_first_hit_dbg` | out | 32 | per packet | Debug: sample count at first qualifying hit |
+| `sc_lock_sample_dbg` | out | 32 | per packet | Debug: sample count when `sc_lock` asserts |
 
 ---
 
 ## Parameters
 
 | Parameter | Value | Notes |
-| --- | --- | --- |
-| Detection window | 2M samples (2 symbols) | Sliding; updated every M samples |
-| Lock hold | 1–3 consecutive hits | Runtime-configurable via `SC_HITS_REQ`; default 2 |
+|---|---|---|
+| Detection window | 2M samples | Sliding; updated every M samples; window history held in FRONTEND_BUF |
+| Lock hold | 1–3 consecutive hits | Runtime via `SC_HITS_REQ`; default 2 |
 | Threshold θ_SC | 0.90 (default) | Programmable via `SC_THR` |
-| Ring buffer depth | 2M per antenna | Stores current and previous dechirped symbol |
-| Accumulator width | int32 | int8 × int8 = int16; sum over M ≤ 4096 samples → 28 bits |
+| Accumulator width | int32 for c_j, int64 for Mag_SC / Energy_Ref | See arithmetic widths below |
+
+### Arithmetic widths (8-bit saturated input)
+
+| Quantity | Max value | Required bits | Type |
+|---|---|---|---|
+| Sample I or Q | ±127 | 8 | int8 |
+| Product I×I | ±16129 | 15 | int16 |
+| c_j (sum over M=64) | ±1,032,256 | 21 | int32 |
+| \|c_j\|² | ~1.07×10¹² | 40 | int64 |
+| Mag_SC (sum of 4) | ~4.26×10¹² | 42 | int64 |
+| E_j (sum of M) | ≤2,064,512 | 22 | int32 |
+| E_j_curr · E_j_del | ~4.26×10¹² | 42 | int64 |
+| Energy_Ref (sum of 4) | ~1.71×10¹³ | 44 | int64 |
 
 ---
 
-## Implementation notes
+## Sub-blocks
 
-### Natural sub-blocks
+1. **Per-branch SC accumulator**
+   - computes `c_j`, `E_j_curr`, `E_j_del` over each M-sample window
+   - resets at each symbol boundary (tracked by `iq_valid` count mod M relative to `timing_ref`)
+   - four instances (one per branch) or time-multiplexed equivalent
 
-Even if Schmidl-Cox is implemented as one top-level RTL block, it naturally decomposes into the following sub-blocks:
+2. **Incoherent combiner**
+   - forms `Mag_SC` and `Energy_Ref` from per-branch outputs
 
-1. **Downchirp reference / dechirp front end**
-   - multiplies incoming complex samples by the known LoRa downchirp reference
-   - this is **not** a standard sinusoidal NCO
-   - it is a deterministic downchirp reference generator, implemented for example with a ROM/LUT or equivalent phase-law generator
+3. **Threshold comparator**
+   - `hit = (Mag_SC >= θ_SC² · Energy_Ref)` using integer multiply only
 
-2. **Symbol window manager**
-   - maintains current and previous symbol windows
-   - tracks `M = 2^SF`
-   - aligns the 2-symbol Schmidl-Cox window using `iq_valid`
+4. **Hit counter / lock FSM**
+   - counts consecutive hits
+   - asserts `sc_lock` when count reaches `SC_HITS_REQ`
+   - prevents re-lock on the same packet until reset
 
-3. **Per-antenna SC correlator**
-   - computes
-     ```text
-     SC_j[s] = Σ_n D_j[s][n] * conj(D_j[s+1][n])
-     ```
-   - one complex accumulation path per antenna, or time-multiplexed equivalent
+5. **Timing-ref back-calculator**
+   - `timing_ref = lock_sample_count - (SC_HITS_REQ + 1) · M + 1`
 
-4. **Per-antenna energy measurement**
-   - computes `E_j[s] = Σ_n |D_j[s][n]|²`
-   - feeds both SC normalization support and AGC energy snapshot export
+6. **CFO diagnostic latch**
+   - latches `c_j[3:0]` and `C_pool = Σ_j c_j` at lock
+   - computes `cfo_diag` via CORDIC or lookup (diagnostic path only, not timing-critical)
 
-5. **Normalizer / threshold comparator**
-   - forms the detection statistic
-   - compares against `SC_THR`
-   - optionally applies the coarse energy gate if `SC_CFG.ENERGY_GATE_EN=1`
+7. **Status / snapshot export**
+   - updates `SC_STAT` each symbol
+   - latches energy values at lock for AGC snapshot
 
-6. **Hit counter / lock FSM**
-   - applies `SC_HITS_REQ`
-   - asserts `sc_lock`
-   - prevents chatter or repeated lock firing on the same packet
+---
 
-7. **Timing-ref back-calculator**
-   - converts the lock event into `timing_ref`
-   - accounts for the configured hit count `N_hit`
+## Implementation Notes
 
-8. **Status / snapshot export**
-   - updates `SC_STAT`
-   - latches `ENERGY[0..3]` for AGC and diagnostics at lock
+**No dechirp multiplier needed.** The chirp reference cancels algebraically for constant-amplitude chirps. Removing the dechirp path eliminates 4 complex multipliers (one per branch) compared to the FFT-path SC block.
 
-### Bring-Up Debug Signals
+**Multiplication over division.** The threshold check uses `Mag_SC >= θ_SC² · Energy_Ref`. No divider or CORDIC needed on the detection path.
 
-For FPGA and early AFE bring-up, expose a minimal set of internal observability points even if the full control plane is not ready yet:
-
-- `sc_hit_dbg`
-  Raw threshold-compare result for the current symbol-pair check. Useful to see whether the detector is failing before or after the hit counter.
-- `sc_hit_count_dbg[1:0]`
-  Current consecutive-hit counter state. Useful to distinguish isolated noise hits from true preamble accumulation.
-- `sc_first_hit_dbg[31:0]`
-  Free-running `iq_valid` sample-count snapshot at the first qualifying hit in the eventual lock sequence.
-- `sc_lock_sample_dbg[31:0]`
-  Free-running `iq_valid` sample-count snapshot when `sc_lock` asserts.
-
-These are intended as debug-only exports:
-
-- route to FPGA ILA / SignalTap probes during bring-up
-- optionally mirror into SPI-readable status registers
-- keep them out of the packet-critical data path
-
-Recommended usage:
-
-- If `SC_STAT` looks healthy but `sc_hit_dbg` never asserts, threshold scaling is likely wrong.
-- If `sc_hit_dbg` pulses but `sc_hit_count_dbg` never reaches `SC_HITS_REQ`, noise or timing jitter is likely dominating.
-- If `sc_lock` asserts but FFT alignment looks wrong, compare `sc_first_hit_dbg`, `sc_lock_sample_dbg`, and `timing_ref` to verify the back-calculation.
-
-**Multiplication over Division.** The threshold check is performed using `|SC|² ≥ θ² · E₁E₂`. This avoids the area-intensive hardware divider and CORDIC blocks previously required for phase/frequency extraction.
-
-**Sensitivity controls.** Two runtime knobs control the sensitivity / false-lock tradeoff:
-
-- `SC_THR`: lower value increases sensitivity but raises false-lock risk
-- `SC_HITS_REQ`: lower value reduces lock latency and increases sensitivity; higher value is more conservative
-
-Recommended operating range:
+**Sensitivity controls:**
 
 - `SC_HITS_REQ = 1`: aggressive weak-signal mode
 - `SC_HITS_REQ = 2`: default
 - `SC_HITS_REQ = 3`: conservative / noisy environment mode
 
-**Preamble length note.** The Schmidl-Cox trigger is not inherently tied to an 8-symbol preamble. It only needs enough repeated upchirps to accumulate the required consecutive hits:
+**Fixed 8-symbol preamble.** SC does not need to detect the preamble length. With `SC_HITS_REQ = 2`, lock asserts after symbols 2–3. The training accumulator independently collects all 8 symbols starting from `timing_ref`. The 8-symbol boundary is structural, not detected.
 
-- minimum useful repeated-upchirp span is approximately `SC_HITS_REQ + 1` symbols
-- longer preambles generally make SC lock easier, not harder
-- the current **8-symbol assumption belongs to Stage 4 FFT acquisition**, which consumes a canonical 8-symbol slice starting at `timing_ref`
-
-So for packets with more than 8 preamble symbols, SC may lock early and the downstream FFT still reads the chosen 8-symbol acquisition window beginning at `timing_ref`.
-
-**Low-Power Design.** Since this block is "always-on," it is heavily clock-gated by `iq_valid`. The complex multipliers used for dechirping and correlation are shared or time-multiplexed across antennas where possible.
-
-**Timing Accuracy.** While SC provides the `timing_ref`, the precision is ± few samples. The downstream FFT Engine (Stage 4) uses the up/down chirp transition (SFD) to refine this to sample-accurate timing.
-
-**Capture handoff.** The detector must not freeze sample capture directly on `sc_lock`. Instead:
-
-1. A free-running `iq_valid` sample counter tags every decimated sample written to the circular capture buffer.
-2. On `sc_lock`, the detector latches `timing_ref = estimated preamble start`.
-3. The capture controller computes:
-
-```
-capture_start = timing_ref - M/2
-capture_len   = 9*M samples per antenna   // 0.5M pre + 8M preamble + 0.5M post
-fft_start     = timing_ref
-```
-
-4. The live FFT trigger may assert as soon as `timing_ref + 8M - 1` has been written.
-5. Capture may continue until `capture_start + capture_len` has been written for diagnostics/readback; diagnostic guard completion must not block live FFT.
-
-For SF12, the guarded capture window is `9 * 4096 * 4 antennas * 2 bytes = 288 KB`.
+**Clock gating.** Block is always-on between packets. Gate all accumulators by `iq_valid` and additionally gate by `delayed_valid` (from FRONTEND_BUF) to suppress spurious accumulation before the buffer has filled.
 
 ---
 
 ## Verification
 
 | Test | Method | Pass criterion |
-| --- | --- | --- |
-| Noiseless lock | Pure upchirp preamble, NR=4 | `sc_lock` asserts within `N_hit + 1` symbols |
-| CFO immunity | Inject ε = ±10 kHz offset | `sc_lock` still asserts regardless of frequency |
+|---|---|---|
+| Noiseless lock | Pure upchirp preamble, NR=4, SF6 | `sc_lock` asserts within `N_hit + 1` symbols |
+| CFO immunity | Inject ε = ±10 kHz offset | `sc_lock` still asserts; timing_ref within ±3 samples |
 | Timing immunity | Random timing offset n₀ ∈ [0, M) | `sc_lock` asserts consistently |
-| False-alarm rate | White noise input, 10 000 packets | `sc_lock` rate < 0.1% |
-| Multiplication check | Verify threshold logic | Logic triggers identically to floating-point division |
-| Hit-count sweep | Run with `SC_HITS_REQ = 1,2,3` | Lock latency and false-alarm behavior match expectation |
+| False-alarm rate | White noise input, 10,000 windows | `sc_lock` rate < 0.1% |
+| Chirp-cancel equivalence | Compare raw-sample SC vs dechirped SC | Identical `sc_lock`, `timing_ref`, `c_j` values |
+| 8-bit saturation | Strong signal clipped to ±127 at SRAM write | `sc_lock` still asserts; no wrap-around corruption |
+| C_pool diagnostic | Known channel, known CFO | `cfo_diag` within ±1 bin of true CFO |
+| Hit-count sweep | `SC_HITS_REQ = 1, 2, 3` | Lock latency and false-alarm match expectation |
+| Accumulator overflow | Max-amplitude input, M=64 | No overflow in int32 accumulators; int64 headroom confirmed |
 
 ---
 
-## Related blocks
+## Related Blocks
 
+- [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — provides `current_j`, `delayed_j`, `delayed_valid`
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — provides `iq_valid`
-- [Packet Control FSM](Packet%20Control%20FSM.md) — owns packet phase and live FFT readiness after `sc_lock`
-- [FFT Engine](FFT%20Engine.md) — triggered after live 8-symbol capture readiness; performs 3-pass preamble acquisition (RCTSL)
-- [Register Map](../Register%20Map.md) — `SC_THR`, `SC_HITS_REQ`, `SC_STAT` status registers
+- [Packet Control FSM](Packet%20Control%20FSM.md) — receives `sc_lock`, `timing_ref`; manages packet phase
+- [Register Map](../Register%20Map.md) — `SC_THR`, `SC_HITS_REQ`, `SC_STAT`, `C_POOL`, `CFO_DIAG` registers

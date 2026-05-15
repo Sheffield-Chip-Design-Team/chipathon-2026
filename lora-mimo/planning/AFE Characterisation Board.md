@@ -22,10 +22,26 @@ This board is a lab and architecture-risk-reduction platform, not the final prod
 - 4 × SX1257
 - 1 × TCXO fanout / buffer device
   - exact part number TBD
-  - intended to distribute one common reference to all 4 SX1257 devices
+  - intended to distribute one common reference to all 4 SX1257 devices via **XTB** (pin 8); XTA (pin 6) left open per datasheet Section 3.3.1
+  - peak-peak amplitude must not exceed 1.8 V at XTB
+- 1 × SMA or header for **external reference clock input**
+  - allows substitution of the on-board TCXO with a lab signal generator or external reference for controlled characterisation measurements
+  - should include a bypass/select option (e.g. 0 Ω resistor or jumper) to switch between on-board TCXO and external SMA reference feeding the same XTB fanout network
 - SMA connectors for RF inputs
 - headers for baseband / digital interfacing to the Arty A100 FPGA
 - power, reset, and SPI access needed for basic SX1257 configuration
+
+### SX1257 Clock Architecture Notes
+
+The SX1257 supports three clock input modes:
+
+| Mode | Pins used | Notes |
+|---|---|---|
+| Internal crystal | XTA + XTB | 36 MHz crystal across both pins; each device has its own independent clock — **not suitable for multi-channel coherence** |
+| External TCXO / sinewave | XTB only (XTA open) | Shared reference distributed to all 4 devices; **this is the intended mode for this board** |
+| Digital clock input | CLK_IN (pin 11) | Separate 36 MHz digital clock path; independent of XTA/XTB |
+
+The shared-TCXO-via-XTB path is the correct choice for validating cross-channel coherence. Per-device crystals would introduce independent CFOs on each channel and defeat the purpose of this board.
 
 ---
 
@@ -76,6 +92,7 @@ This board should be used to gather at least the following:
 - noise floor and spur profile per channel
 - packet detect repeatability with shared-clock 4-channel capture
 - timing relationship between channels at the FPGA header
+- inter-channel CFO spread: measure CFO independently per channel on the same received packet and record the variation across channels, across packets, and across temperature/power-cycle conditions
 
 Recommended early tests:
 
@@ -83,6 +100,7 @@ Recommended early tests:
 2. Shared-clock validation across all 4 channels.
 3. Same-signal injection into multiple channels and measure relative phase / amplitude.
 4. Capture LoRa preambles into the FPGA and validate `sc_lock`, `timing_ref`, and FFT acquisition.
+5. **Cross-channel CFO consistency check.** Receive the same LoRa transmission on all 4 channels simultaneously and measure the CFO estimate on each channel independently. The non-FFT combining architecture assumes a single common CFO across all branches — if inter-channel CFO spread is significant (e.g. due to per-SX1257 LO pulling or reference distribution skew), the assumption that common CFO cancels in the weight ratios breaks down and per-branch CFO correction may be needed. Record CFO spread across channels over multiple packets and temperature/power-cycle conditions.
 
 ---
 

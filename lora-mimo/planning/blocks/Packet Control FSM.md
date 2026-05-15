@@ -1,133 +1,208 @@
 # Packet Control FSM
 
-RX path control block. See [DSP Flow](../DSP%20Flow.md) for context.
+RX path control block (non-FFT frontend). See [Non-FFT LoRa Frontend Proposal](../Non-FFT%20LoRa%20Frontend%20Proposal.md) and [DSP Flow](../DSP%20Flow.md) for context.
 
 **Owner:** TBD
-**Status:** Proposed
+**Status:** Rewritten for non-FFT path
 
 ---
 
-## Function
+## Role
 
-Owns packet phase, live FFT readiness, capture protection, and no-glitch switching between bypass and combined output. This block converts Schmidl-Cox timing plus sample-counter progress into deterministic control events for Baseband SRAM, FFT, PicoRV32 firmware, and the combiner.
+Owns packet phase and no-glitch switching between bypass and combined output. Converts SC timing events and weight-readiness signals into deterministic control for the frontend buffer, weight generation, and combiner.
 
-The FSM is required because capture/FFT are historical paths while the combiner/remodulator are live streaming paths. It must never backpressure `iq_valid`; if control work misses the current packet, the live stream stays in bypass.
+Compared to the FFT-path FSM, this version is significantly simplified:
+
+- No FFT trigger, no capture protection, no SRAM window management
+- No `h_ready` input — replaced by `training_done` from the training accumulator
+- Critical path is: `sc_lock → training_done → W_commit → safe_switch`
+
+The FSM must never backpressure `iq_valid`. If weight computation misses the current packet, the live stream stays in bypass — this is expected next-packet behaviour, not an error.
 
 ---
 
 ## State Machine
 
-| State | Entry | Exit |
-| --- | --- | --- |
-| `IDLE` | Reset, packet done, timeout | `sc_lock` |
-| `PREAMBLE_DETECTED` | `sc_lock`, latch `timing_ref`, `ACTIVE_MODE`, `ACTIVE_ANTENNA_EN` | Live 8-symbol window resident |
-| `FFT_WAIT` | Assert/protect live capture window and trigger FFT | `h_ready` from FFT |
-| `W_COMMIT_WINDOW` | Raise IRQ/status for PicoRV32 W computation | `W_commit` while packet is active, or packet done / idle |
-| `PAYLOAD_ACTIVE` | Current-packet W committed, or bypass selected for this packet | packet done / timeout |
-| `PACKET_DONE` | End-of-packet marker or timeout | return to `IDLE` |
+```
+        sc_lock
+IDLE ──────────────► PREAMBLE_ACQ
+ ▲                        │
+ │                  training_done
+ │                        │
+ │                        ▼
+ │                    W_PENDING ──── timeout / W_commit ──► PAYLOAD_ACTIVE
+ │                                                                │
+ └────────────────────────────── packet_end / timeout ───────────┘
+```
 
-If `W_commit` arrives while a packet is active, defer activation and leave the current packet in bypass until the next idle boundary.
+| State | Entry condition | Active behaviour | Exit condition |
+|---|---|---|---|
+| `IDLE` | Reset; packet end; timeout | `safe_switch=1`; promote `W_SHADOW→W_ACTIVE` if `W_commit_pending`; unfreeze FRONTEND_BUF | `sc_lock` |
+| `PREAMBLE_ACQ` | `sc_lock` | Latch `timing_ref`, `ACTIVE_MODE`, `ACTIVE_ANTENNA_EN`; freeze FRONTEND_BUF; combiner=bypass; raise `IRQ_CORR_LOCK` | `training_done` or preamble timeout |
+| `W_PENDING` | `training_done` | Raise `IRQ_TRAINING_DONE`; weight gen computes and writes `W_SHADOW`; combiner stays bypass | `W_commit` or payload-start timeout |
+| `PAYLOAD_ACTIVE` | Payload phase begins | Combiner = `W_ACTIVE` if `W_valid`, else bypass; set `W_MISSED_PACKET` if W was not committed before this state | `packet_end` or timeout |
+
+### Packet end detection
+
+The ASIC has no explicit framing signal from SX1302. Packet end is detected by either:
+
+1. **New `sc_lock`** — a new preamble detected implies the previous packet is done
+2. **Configurable timeout** — `timing_ref + PKT_TIMEOUT_SYMS * M` where `PKT_TIMEOUT_SYMS` is a register-configurable maximum packet length in symbols (default covers the maximum LoRa payload at the configured SF/BW/CR)
+
+Whichever fires first terminates the current packet and returns the FSM to IDLE.
+
+---
+
+## Timing Events
+
+### Preamble timeout
+
+Training should complete within the 8-symbol preamble window:
+
+```
+preamble_timeout = timing_ref + 8M + PREAMBLE_GUARD
+```
+
+`PREAMBLE_GUARD` is a small configurable margin (default 2M) to account for timing_ref accuracy. If `training_done` has not asserted by this point, the FSM transitions to PAYLOAD_ACTIVE without valid weights, and `W_MISSED_PACKET` is set.
+
+### Payload start estimate
+
+The FSM enters PAYLOAD_ACTIVE no later than:
+
+```
+payload_start_estimate = timing_ref + 12M   (approximate sync + SFD length at SF6)
+```
+
+If `W_commit` fires before this point and the receiver is between packets, `W_valid_set` promotes the weights. Otherwise the commit is queued for the next safe_switch.
+
+### Safe switch
+
+`safe_switch=1` only while in IDLE (between packets). This is the only window where:
+
+- `W_ACTIVE` is updated from `W_SHADOW`
+- `ACTIVE_MODE` and `ACTIVE_ANTENNA_EN` are updated from their shadow registers
+- FRONTEND_BUF is unfrozen
+
+Mid-packet changes to mode or antenna mask are accepted into shadow registers but do not take effect until the next IDLE entry.
+
+---
+
+## W_commit handling
+
+`W_commit` may arrive in any state. The FSM sets `W_commit_pending` as a sticky flag:
+
+```
+W_commit asserted → W_commit_pending = 1
+In IDLE           → W_valid_set = 1, W_ACTIVE ← W_SHADOW, W_commit_pending = 0
+```
+
+| W_commit timing | Result |
+|---|---|
+| Arrives in W_PENDING or PAYLOAD_ACTIVE | Queued; activates at next IDLE entry |
+| Arrives in IDLE | Immediately promotes W_SHADOW → W_ACTIVE |
+| Never arrives before packet end | W_MISSED_PACKET set; combiner stays bypass for that packet |
+
+---
+
+## FRONTEND_BUF control
+
+| FSM event | FRONTEND_BUF action |
+|---|---|
+| sc_lock (IDLE → PREAMBLE_ACQ) | Assert `buf_freeze` — stop overwriting acquisition history |
+| packet_end (any → IDLE) | Deassert `buf_freeze` — resume rolling acquisition |
+
+The buffer is frozen from sc_lock until packet end so that the 2-symbol acquisition history is preserved for optional post-lock diagnostics. Freezing does not affect the live sample path to the training accumulator or combiner — those receive samples directly from the decimator.
+
+---
+
+## Combiner source policy
+
+| Condition | `combiner_source` |
+|---|---|
+| `W_valid = 0` (no committed weights yet) | Bypass (lowest enabled antenna) |
+| In PREAMBLE_ACQ or W_PENDING | Bypass |
+| In PAYLOAD_ACTIVE, `W_valid = 1` | W_ACTIVE |
+| In PAYLOAD_ACTIVE, `W_valid = 0` | Bypass |
+| `W_MISSED_PACKET = 1` for current packet | Bypass (this packet only) |
+
+`W_valid` is set once after the first successful W_commit and cleared only if the host explicitly resets it or changes mode. It persists across packets so that an older (but still valid) W is used rather than falling back to bypass every time weight computation is slightly late.
 
 ---
 
 ## Interface
 
-| Port | Direction | Width | Description |
-| --- | --- | --- | --- |
+| Port | Dir | Width | Description |
+|---|---|---|---|
+| `clk` | in | 1 | 32 MHz system clock |
+| `rst_n` | in | 1 | Active-low reset |
 | `iq_valid` | in | 1 | Decimated sample strobe |
-| `sample_count` | in | 32 | Free-running `iq_valid` sample counter |
-| `sf` | in | 3 | Spreading factor, `M = 2^(sf+5)` |
-| `sc_lock` | in | 1 | Schmidl-Cox lock event |
-| `timing_ref` | in | 32 | Estimated preamble-start sample index |
-| `h_ready` | in | 1 | FFT outputs `H/N0/eps_sub` valid |
-| `W_commit` | in | 1 | PicoRV32 finished writing `W_SHADOW` |
-| `mode_shadow` | in | 2 | Host/firmware requested mode |
+| `sample_count` | in | 32 | Free-running iq_valid sample counter |
+| `sf` | in | 3 | Spreading factor; M = 2^SF |
+| `sc_lock` | in | 1 | SC preamble detection event |
+| `timing_ref` | in | 32 | Preamble-start sample index from SC |
+| `training_done` | in | 1 | Training accumulator complete |
+| `W_commit` | in | 1 | Weight gen finished writing W_SHADOW |
+| `mode_shadow` | in | 2 | Host/firmware requested combining mode |
 | `antenna_en_shadow` | in | 4 | Host/firmware requested antenna mask |
-| `packet_active` | out | 1 | Packet in progress |
+| `pkt_timeout_syms` | in | 8 | Max packet length in symbols (register-configurable) |
+| `safe_switch` | out | 1 | Receiver idle; W/mode/antenna active banks may update |
+| `W_valid_set` | out | 1 | Strobe: commit W_SHADOW → W_ACTIVE |
+| `W_missed_packet` | out | 1 | Sticky: W not ready before payload; cleared on next sc_lock |
+| `combiner_source` | out | 1 | 0=bypass, 1=W_ACTIVE |
+| `buf_freeze` | out | 1 | FRONTEND_BUF freeze control |
 | `packet_phase` | out | 3 | Encoded FSM state for status/debug |
-| `live_fft_ready` | out | 1 | 8-symbol window is resident; trigger FFT |
-| `capture_protect` | out | 1 | Protect live RCTSL window from overwrite |
-| `safe_switch` | out | 1 | Receiver is idle between packets; W/mode/antenna active banks may update |
-| `W_valid_set` | out | 1 | Commit `W_SHADOW` to `W_ACTIVE` |
-| `W_missed_packet` | out | 1 | W arrived too late; packet remains bypass |
-| `combiner_source` | out | 1 | 0=bypass, 1=`W_ACTIVE` |
-| `active_mode` | out | 2 | Latched mode for this packet |
-| `active_antenna_en` | out | 4 | Latched antenna mask for this packet |
+| `packet_active` | out | 1 | Packet FSM not in IDLE |
+| `active_mode` | out | 2 | Latched combining mode for current packet |
+| `active_antenna_en` | out | 4 | Latched antenna mask for current packet |
 
 ---
 
-## Timing Rules
+## IRQ Sources
 
-**Live FFT readiness.**
-
-```
-live_fft_ready when sample_count has reached timing_ref + 8M - 1
-```
-
-This event must not wait for diagnostic post-guard capture.
-
-**Safe switching.** `W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` update only when `safe_switch=1`. Under the no-mid-packet-switching policy, that means packet idle between packets. If `W_commit` arrives while a packet is active, the current packet remains in bypass and the commit is deferred to the next idle boundary.
-
-**Weight timing policy.** The current FSM behavior corresponds to **next-packet weight application** by default:
-
-- packet `N` preamble triggers SC/FFT estimation
-- PicoRV32 computes `W` for packet `N`
-- if `W_commit` arrives after packet `N` is already active, packet `N` stays in bypass
-- the committed weights become active at the next idle boundary and therefore apply starting with packet `N+1`
-
-This keeps the live path simple and glitch-free, but it assumes the channel estimate remains useful across packet boundaries. A future same-packet mode would require an additional delayed payload path or a separately verified mid-packet safe-switch mechanism.
-
-**Bypass fallback.** Before `W_valid_set`, or if `W_missed_packet=1`, the combiner source remains bypass:
-
-```
-combiner_source = BYPASS
-```
-
-This preserves a valid single-antenna stream into SX1302.
-
-**No backpressure.** The FSM may assert overflow/missed-packet status, but it must not stall decimator output, combiner input, or remodulator input.
+| IRQ | Trigger | Consumer |
+|---|---|---|
+| `IRQ_CORR_LOCK` | IDLE → PREAMBLE_ACQ | Debug / host visibility |
+| `IRQ_TRAINING_DONE` | PREAMBLE_ACQ → W_PENDING | PicoRV32 (firmware weight path) or debug |
+| `IRQ_W_MISSED_PACKET` | W_MISSED_PACKET set | Debug / threshold tuning |
+| `IRQ_PACKET_DONE` | Any → IDLE | Debug / host visibility |
 
 ---
 
-## Status / IRQ
+## Comparison with FFT-path FSM
 
-Expose at least:
-
-| Status | Meaning |
-| --- | --- |
-| `PACKET_ACTIVE` | Packet FSM is not idle |
-| `PACKET_PHASE[2:0]` | Encoded FSM state |
-| `LIVE_FFT_READY` | FFT trigger point reached |
-| `W_VALID` | Active W applies to current packet |
-| `W_PENDING` | FFT is done and firmware W commit is pending |
-| `W_MISSED_PACKET` | Packet stayed in bypass because W missed safe switch |
-
-IRQ sources:
-
-- `IRQ_STATUS.CORR_LOCK` on `PREAMBLE_DETECTED`
-- `IRQ_STATUS.H_READY` when H/N0/eps_sub are valid and firmware should compute W
-- `IRQ_STATUS.W_MISSED_PACKET` for debug/tuning
-- `packet_done` if end-of-packet marker/timeout is implemented
+| Feature | FFT path | Non-FFT path |
+|---|---|---|
+| After sc_lock | Wait for live FFT window (`timing_ref + 8M - 1`), trigger FFT | Wait for `training_done` (asserts at approximately same point) |
+| States | IDLE / PREAMBLE_DETECTED / FFT_WAIT / W_COMMIT_WINDOW / PAYLOAD_ACTIVE / PACKET_DONE | IDLE / PREAMBLE_ACQ / W_PENDING / PAYLOAD_ACTIVE |
+| SRAM management | `live_fft_ready`, `capture_protect` for 288 KB capture window | `buf_freeze` for 1 kB FRONTEND_BUF only |
+| W computation trigger | `h_ready` from FFT engine | `training_done` from training accumulator |
+| W computation path | PicoRV32 reads H/N0 from SRAM | PicoRV32 or hardware reads Z_j from registers |
+| Combiner fallback | Bypass until W_valid | Bypass until W_valid (identical policy) |
+| safe_switch policy | Identical | Identical |
 
 ---
 
 ## Verification
 
 | Test | Method | Pass criterion |
-| --- | --- | --- |
-| Live FFT trigger | Inject SC lock and advance sample counter | `live_fft_ready` asserts at `timing_ref + 8M - 1` |
-| No post-guard block | Enable diagnostic capture | `live_fft_ready` still asserts before diagnostic capture completion |
-| W on time | Assert `W_commit` while packet is idle | `W_valid_set` asserts at safe switch; combiner source changes to W |
-| W late | Assert `W_commit` during active packet | `W_missed_packet=1`; combiner source stays bypass until next idle boundary |
-| Mode write mid-packet | Change `mode_shadow` during `PAYLOAD_ACTIVE` | `active_mode` unchanged until next idle boundary |
-| No backpressure | Capture overflow during packet | `iq_valid` path continues; status bit set |
+|---|---|---|
+| Normal lock and train | Inject sc_lock → training_done → W_commit in sequence | FSM traverses all states; W_valid_set asserts in IDLE; combiner uses W_ACTIVE on next packet |
+| W on time | W_commit before payload start | W_MISSED_PACKET=0; W_ACTIVE valid for current packet if between packets |
+| W late (next-packet) | W_commit during PAYLOAD_ACTIVE | W_MISSED_PACKET=1; combiner stays bypass this packet; W_ACTIVE updated at IDLE |
+| Training timeout | training_done never asserts | Preamble timeout fires; FSM enters PAYLOAD_ACTIVE in bypass; W_MISSED_PACKET=1 |
+| Packet timeout | New sc_lock never arrives | PKT_TIMEOUT_SYMS expires; FSM returns to IDLE |
+| Back-to-back packets | Two sc_locks in rapid succession | First sc_lock ends current packet (IDLE); second sc_lock immediately enters PREAMBLE_ACQ |
+| Mode shadow write mid-packet | Write mode_shadow during PAYLOAD_ACTIVE | active_mode unchanged until IDLE; shadow value promoted at safe_switch |
+| No backpressure | Packet arrives during W_PENDING | iq_valid path unaffected; combiner stays bypass |
+| buf_freeze timing | Check FRONTEND_BUF control | buf_freeze asserts at sc_lock, deasserts at packet end |
 
 ---
 
-## Related blocks
+## Related Blocks
 
-- [Schmidl-Cox Preamble Detector](Correlator%20Bank.md) — provides `sc_lock` and `timing_ref`
-- [Baseband SRAM](Baseband%20SRAM.md) — capture protection and live FFT window
-- [FFT Engine](FFT%20Engine.md) — triggered by `live_fft_ready`
-- [PicoRV32 Integration](PicoRV32%20Integration.md) — computes W and asserts `W_commit`
-- [ALMMSE/MRC Combiner](ALMMSE-MRC%20Combiner.md) — consumes `combiner_source`, active mode, active antenna mask, and `W_valid`
+- [Correlator Bank (SC)](Correlator%20Bank.md) — provides `sc_lock`, `timing_ref`
+- [Training Accumulator](Training%20Accumulator.md) — provides `training_done`
+- [Weight Generation](Weight%20Generation.md) — provides `W_commit`
+- [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — receives `buf_freeze`
+- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — receives `combiner_source`, `active_mode`, `active_antenna_en`
+- [Register Map](../Register%20Map.md) — `PKT_TIMEOUT_SYMS`, `PACKET_PHASE`, `W_MISSED_PACKET`, IRQ registers

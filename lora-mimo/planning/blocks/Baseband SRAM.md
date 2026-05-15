@@ -5,6 +5,8 @@ Memory block. See [System Architecture](../System%20Diagram.md) for context.
 **Owner:** TBD
 **Status:** Not started
 
+> **Non-FFT path note:** This block (544 KB FFT staging + sample capture SRAM) is **not used** in the non-FFT streaming frontend architecture. The non-FFT path replaces it with a 1 kB Frontend Buffer SRAM. This document is retained as a reference for the FFT path only. See [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) for the non-FFT replacement.
+
 ---
 
 ## Function

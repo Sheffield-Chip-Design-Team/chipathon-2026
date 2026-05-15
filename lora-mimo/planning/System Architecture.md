@@ -68,8 +68,9 @@ graph LR
             direction TB
             SC["Schmidl-Cox / Correlator\nsliding magnitude autocorr\nsc_lock · timing_ref"]
             EM["Energy Measurement\nper-antenna energy snapshot\nAGC / diagnostics"]
-            PCFSM["Packet Control FSM\npacket phase · safe_switch\nlive_fft_ready · W gating"]
-            FFT["FFT Engine\nmulti-lane radix-2\nSF5–SF12 (M=32–4096)\nlive: unpadded 8-symbol RCTSL\n3-pass: eps_sub → k_peak → H"]
+            TACC["Training Accumulator\ndechirp + integrate preamble\nZ_j · training_done"]
+            PCFSM["Packet Control FSM\npacket phase · safe_switch\nbuf_freeze · W gating"]
+            FBUF["Frontend Buffer Controller\n1 kB rolling SRAM\n8-bit saturated @ SF6"]
         end
 
         subgraph combining["ALMMSE / MRC Combining"]
@@ -83,30 +84,28 @@ graph LR
         subgraph ctrl["Control Plane"]
             direction TB
             PICO["PicoRV32\nRV32IM\nW matrix computation\nTDD switching\nAGC loop"]
-            BSRAM["Baseband SRAM\n544 KB\n0x00000–0x3FFFF FFT staging\n0x40000–0x87FFF sample capture"]
-            IRQC["IRQ Controller\ncorr_lock · h_ready · tx events"]
+            IRQC["IRQ Controller\ncorr_lock · training_done · tx events"]
             SPIS["SPI Slave\nRPi SPI0 CS1\nconfig + FW load"]
             SPIM["SPI Master\n→ SX1257 config\n(shared MOSI/MISO/SCK)"]
             SWDTAP["SWD TAP\nPicoRV32 debug"]
             WB["AHB-Lite Bus"]
             PICO <--> WB
-            WB <--> BSRAM & IRQC & SPIS & SPIM & SWDTAP
+            WB <--> IRQC & SPIS & SPIM & SWDTAP
         end
 
         D1 & D2 & D3 & D4 --> SC
         D1 & D2 & D3 & D4 --> EM
         D1 & D2 & D3 & D4 --> COMB
-        D1 & D2 & D3 & D4 -->|"raw int8 IQ capture"| BSRAM
+        D1 & D2 & D3 & D4 -->|"raw full-precision samples"| TACC
+        D1 & D2 & D3 & D4 -->|"8-bit saturated IQ"| FBUF
         SC -->|"sc_lock · timing_ref"| PCFSM
-        SC -->|"sc_lock · timing_ref"| BSRAM
+        SC -->|"sc_lock · timing_ref"| TACC
+        FBUF -->|"current · delayed samples"| SC
+        PCFSM -->|"buf_freeze"| FBUF
+        TACC -->|"Z_j · training_done"| PCFSM
+        TACC -->|"Z_j · training_done"| IRQC
         EM -->|"energy[0..3] snapshot"| PICO
-        PCFSM -->|"live_fft_ready · capture_protect"| BSRAM
-        BSRAM -->|"timing_ref\nprotected 8-symbol window"| FFT
-        PCFSM -->|"trigger"| FFT
-        FFT -->|"H matrix · N₀ · eps_sub\nh_ready"| PICO
-        FFT -->|"h_ready"| PCFSM
         SC -->|"corr_lock"| IRQC
-        FFT -->|"h_ready"| IRQC
         PCFSM -->|"tx / mode status"| IRQC
         IRQC -->|"IRQ"| PICO
         PICO -->|"W_SHADOW · W_commit"| PCFSM
@@ -314,20 +313,22 @@ The following boundaries require explicit CDC treatment:
 | Component | GE | Area (est.) |
 | --- | --- | --- |
 | ΣΔ Decimator ×4 (CIC + FIR) | ~12,000 | |
-| Schmidl-Cox Detector (ring buf + autocorr + CORDIC) | ~4,000 | |
-| FFT Engine (iterative, SF5–SF12) | ~10,000 | |
+| Schmidl-Cox Detector (autocorr + threshold) | ~3,000 | |
+| Frontend Buffer Controller (1 kB SRAM + ctrl) | ~500 | |
+| Training Accumulator (chirp LUT + 4× int64 acc) | ~1,500 | |
+| Weight Generation (shift + calibrate + compute) | ~2,000 | |
 | ALMMSE/MRC Combiner | ~10,000 | |
 | ΣΔ Re-mod ×2 | ~1,400 | |
 | PicoRV32 RV32IM | ~10,000 | |
 | SPI Slave + SPI Master + AHB-Lite | ~5,000 | |
 | Status register bank | ~1,000 | |
 | IRQ + misc | ~800 | |
-| **Logic total** | **~54,200 GE** | **~0.66 mm²** |
-| Baseband SRAM (544 KB) | — | ~4.50 mm² |
+| **Logic total** | **~47,200 GE** | **~0.57 mm²** |
+| Frontend Buffer SRAM (1 kB × 2 macros) | — | ~0.02 mm² |
 | PicoRV32 IMEM+DMEM (64 KB) | — | ~0.52 mm² |
-| **Total** | | **~5.68 mm²** |
+| **Total** | | **~1.11 mm²** |
 
-> SRAM area is the critical constraint. Run GF180MCU OpenRAM compiler for 544 KB and 64 KB macros before committing to final floorplan. If a single 544 KB macro is impractical, split Baseband SRAM into 256 KB FFT staging and 288 KB capture macros.
+> FFT Engine (~10 K GE) and Baseband SRAM (544 KB, ~4.50 mm²) are removed in the non-FFT architecture, significantly reducing both logic area and SRAM area. The dominant area is now PicoRV32 IMEM+DMEM. Frontend Buffer uses two 512-byte single-port SRAM macros (one per 2-channel pair). GE estimates for new blocks are preliminary.
 
 ---
 
@@ -352,18 +353,20 @@ See [Work Allocation Summary](Work%20Allocation.md) for a more detailed assignme
 | Block | Owner | Spec |
 | --- | --- | --- |
 | ΣΔ Decimator ×4 (CIC + FIR) | TBD | — |
-| Schmidl-Cox Preamble Detector | TBD | — |
-| FFT Engine (iterative radix-2, SF5–SF12) | TBD | — |
+| Schmidl-Cox Preamble Detector | TBD | [Correlator Bank](blocks/Correlator%20Bank.md) |
+| Frontend Buffer Controller (1 kB SRAM) | TBD | [Frontend Buffer Controller](blocks/Frontend%20Buffer%20Controller.md) |
+| Training Accumulator | TBD | [Training Accumulator](blocks/Training%20Accumulator.md) |
+| Weight Generation | TBD | [Weight Generation](blocks/Weight%20Generation.md) |
+| Packet Control FSM | TBD | [Packet Control FSM](blocks/Packet%20Control%20FSM.md) |
 | ALMMSE/MRC Combiner | TBD | — |
 | ΣΔ Re-mod ×2 | TBD | — |
-| PicoRV32 RV32IM integration | TBD | — |
-| Baseband SRAM (544 KB OpenRAM) | TBD | — |
-| PicoRV32 SRAM (16 KB OpenRAM) | TBD | — |
+| PicoRV32 RV32IM integration | TBD | [PicoRV32 Integration](blocks/PicoRV32%20Integration.md) |
+| PicoRV32 SRAM (64 KB OpenRAM) | TBD | — |
 | SPI Slave (host interface) | TBD | — |
 | SPI Master (→ SX1257) | TBD | — |
 | AHB-Lite Bus | TBD | — |
-| Status Register Bank | TBD | [Register Map](Register%20Map.md) |
-| IRQ Controller | TBD | — |
+| Status Register Bank | TBD | [Register Map](Register%20Map.md) · [Register Map Delta](Register%20Map%20Delta%20-%20Non-FFT.md) |
+| IRQ Controller | TBD | [IRQ Controller](blocks/IRQ%20Controller.md) |
 | SWD TAP | TBD | — |
 | PicoRV32 firmware + algorithms | TBD | [MIMO Algorithms](MIMO%20Algorithms.md) |
 | Physical design & floorplan | TBD | — |
