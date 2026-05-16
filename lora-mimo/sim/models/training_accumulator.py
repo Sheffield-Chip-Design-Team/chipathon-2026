@@ -47,7 +47,7 @@ def training_accumulate(
     timing_ref: int,
     M: int,
     ref_sel: int = 0,
-) -> tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, int, float]:
     """
     Cross-correlate preamble samples against reference branch to estimate
     per-branch relative channel coefficients.
@@ -75,6 +75,10 @@ def training_accumulate(
         For j == ref_sel: Z_j is real (auto-correlation = branch energy).
     n_acc : int
         Number of samples accumulated.
+    E_ref : float
+        Reference branch energy: Σ_n |rx_ref[n]|² over the accumulation window.
+        Used by WeightGenerator to normalise MRC weights to Q1.15-friendly range:
+        w_j = conj(Z_j) / (Σ|Z_j|² / E_ref)  →  |w_j| ≈ |h_j| / Σ|h_k|²  ≤ 1.
 
     Notes
     -----
@@ -88,7 +92,7 @@ def training_accumulate(
     acc_end   = min(timing_ref + 8 * M - 1, N_samples - 1)
 
     if acc_start > acc_end:
-        return np.zeros(NR, dtype=complex), 0
+        return np.zeros(NR, dtype=complex), 0, 0.0
 
     window     = raw_j[:, acc_start:acc_end + 1]   # (NR, n_acc)
     ref_window = raw_j[ref_sel, acc_start:acc_end + 1]  # (n_acc,)
@@ -97,7 +101,8 @@ def training_accumulate(
     Z_j = window @ np.conj(ref_window)              # (NR,)
 
     n_acc = acc_end - acc_start + 1
-    return Z_j, n_acc
+    E_ref = float(np.sum(np.abs(ref_window) ** 2))
+    return Z_j, n_acc, E_ref
 
 
 def apply_calibration(
@@ -113,6 +118,7 @@ def compute_weights(
     mode: str = "mrc",
     antenna_en: int = 0xF,
     cal_j: np.ndarray | None = None,
+    E_ref: float | None = None,
 ) -> np.ndarray:
     """
     Compute combining weights from training accumulator output.
@@ -126,13 +132,15 @@ def compute_weights(
     mode      : 'mrc' | 'egc' | 'sc' | 'bypass'
     antenna_en: bitmask of enabled antennas (bit 0 = antenna 0)
     cal_j     : (NR,) complex Q1.15 calibration coefficients, or None
+    E_ref     : reference branch energy from training_accumulate(); enables
+                Q1.15-friendly MRC normalisation: |w_j| ≈ |h_j|/Σ|h_k|² ≤ 1
 
     Returns
     -------
     w : (NR,) complex Q1.15 weights
     """
     wgen = WeightGenerator(mode=mode, antenna_en=antenna_en, cal_j=cal_j)
-    w, _ = wgen.process(Z_j)
+    w, _ = wgen.process(Z_j, E_ref=E_ref)
     return w
 
 

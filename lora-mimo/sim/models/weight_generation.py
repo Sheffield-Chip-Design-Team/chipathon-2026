@@ -58,6 +58,7 @@ def compute_weights_hw(
     H_j_cal: np.ndarray,
     mode: str = "mrc",
     antenna_en: int = 0xF,
+    E_ref_H: float | None = None,
 ) -> np.ndarray:
     """
     COMPUTE + SCALE states: produce Q1.15 combining weights.
@@ -67,6 +68,10 @@ def compute_weights_hw(
     H_j_cal   : (NR,) complex calibrated channel estimates (int32-range floats)
     mode      : 'mrc' | 'egc' | 'sc' | 'bypass'
     antenna_en: bitmask of enabled antennas (bit j = antenna j)
+    E_ref_H   : E_ref scaled to H space = E_ref / 2^K.
+                When provided, MRC uses w_j = conj(H) * E_ref_H / Σ|H|²,
+                giving |w_j| ≈ |h_j|/Σ|h_k|² (Q1.15-friendly).
+                When None, falls back to w_j = conj(H) / Σ|H|² (tiny for large inputs).
 
     Returns
     -------
@@ -104,7 +109,11 @@ def compute_weights_hw(
         S = float(np.sum(np.abs(H) ** 2))
         if S == 0.0:
             return np.zeros(NR, dtype=complex)
-        w = np.conj(H) / S
+        if E_ref_H is not None and E_ref_H > 0.0:
+            # E_ref normalisation: |w_j| ≈ |h_j|/Σ|h_k|² (fits Q1.15)
+            w = np.conj(H) * E_ref_H / S
+        else:
+            w = np.conj(H) / S
         return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
 
     raise ValueError(f"Unknown mode {mode!r}. Use 'mrc', 'egc', 'sc', or 'bypass'.")
@@ -140,9 +149,15 @@ class WeightGenerator:
         self.antenna_en = antenna_en
         self.cal_j = cal_j
 
-    def process(self, Z_j: np.ndarray) -> tuple[np.ndarray, int]:
+    def process(self, Z_j: np.ndarray, E_ref: float | None = None) -> tuple[np.ndarray, int]:
         """
         Run the full FSM from Z_j to Q1.15 weights.
+
+        Parameters
+        ----------
+        Z_j   : (NR,) complex channel estimates from training_accumulate()
+        E_ref : reference branch energy from training_accumulate(); when provided,
+                MRC weights are scaled to |w_j| ≈ |h_j|/Σ|h_k|² (Q1.15-friendly).
 
         Returns
         -------
@@ -151,5 +166,8 @@ class WeightGenerator:
         """
         H_j, K = shift_normalise(Z_j)
         H_j_cal = apply_calibration(H_j, self.cal_j)
-        w = compute_weights_hw(H_j_cal, mode=self.mode, antenna_en=self.antenna_en)
+        # Scale E_ref to H space: H_j = Z_j / 2^K, so E_ref_H = E_ref / 2^K
+        E_ref_H = E_ref / (2 ** K) if (E_ref is not None and K >= 0) else None
+        w = compute_weights_hw(H_j_cal, mode=self.mode, antenna_en=self.antenna_en,
+                               E_ref_H=E_ref_H)
         return w, K

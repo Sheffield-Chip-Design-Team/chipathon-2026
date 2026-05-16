@@ -126,6 +126,41 @@ def test_equal_branches_mrc():
     print("PASS  WeightGenerator MRC: equal branches → equal-magnitude weights")
 
 
+def test_mrc_eref_normalisation():
+    """E_ref normalisation gives |w_j| ≈ 1/NR ≈ 0.25 for equal unit channels."""
+    NR = 4
+    n_acc = 8 * 64   # SF6 full preamble
+    # h_j = 1 for all j, ref_sel=0 → Z_j = h_j·conj(h_0)·n_acc = n_acc
+    Z_j = np.ones(NR, dtype=complex) * n_acc
+    # E_ref = |h_ref|^2 · n_acc = n_acc (unit channel, n_acc samples)
+    E_ref = float(n_acc)
+    wgen = WeightGenerator(mode="mrc")
+    w, _ = wgen.process(Z_j, E_ref=E_ref)
+    expected = 1.0 / NR   # = 0.25
+    assert np.allclose(np.abs(w), expected, atol=2e-4), \
+        f"MRC with E_ref: expected |w_j|={expected:.4f}, got {np.abs(w)}"
+    print(f"PASS  WeightGenerator MRC+E_ref: equal unit channels → |w_j|={np.abs(w[0]):.4f} ≈ 1/NR={expected:.4f}")
+
+
+def test_mrc_eref_vs_no_eref():
+    """With E_ref, MRC weights are O(1/NR); without, they are O(1/n_acc^2)."""
+    NR = 4
+    n_acc = 512
+    Z_j = np.ones(NR, dtype=complex) * n_acc
+    E_ref = float(n_acc)
+
+    wgen = WeightGenerator(mode="mrc")
+    w_with, _ = wgen.process(Z_j, E_ref=E_ref)
+    w_without, _ = wgen.process(Z_j, E_ref=None)
+
+    # With E_ref: |w_j| ≈ 0.25 — fits Q1.15
+    assert np.abs(w_with[0]) > 0.1, f"E_ref weights too small: {np.abs(w_with[0]):.6f}"
+    # Without E_ref: |w_j| ≈ 1/(NR·n_acc) — much smaller (rounds to ~0 in Q1.15)
+    assert np.abs(w_without[0]) < np.abs(w_with[0]) / 10, \
+        "Without E_ref, weights should be much smaller"
+    print(f"PASS  MRC E_ref vs no-E_ref: |w| with={np.abs(w_with[0]):.4f}, without={np.abs(w_without[0]):.6f}")
+
+
 def test_int64_scale_shift_applied():
     # Verify shift_normalise fires for int64-range inputs (would overflow int32 without it)
     h = np.array([0.8 + 0.6j, 0.5 - 0.3j, 0.1 + 0.9j, 0.7 + 0.2j])
@@ -198,7 +233,9 @@ if __name__ == "__main__":
     test_bypass_selects_lowest_enabled()
     test_disabled_antennas_zeroed()
     test_equal_branches_mrc()
-    test_int64_scale_mrc()
+    test_mrc_eref_normalisation()
+    test_mrc_eref_vs_no_eref()
+    test_int64_scale_shift_applied()
     test_dc_removal_removes_dc()
     test_dc_removal_passes_ac()
     test_dc_removal_reset()
