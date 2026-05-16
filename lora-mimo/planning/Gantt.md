@@ -1,6 +1,6 @@
 # Project Schedule
 
-Tapeout deadline: **1 September 2026**. Design review: **July 2026**. Today: **6 May 2026**.
+Tapeout deadline: **1 September 2026**. Design review: **July 2026**. Today: **17 May 2026**.
 
 See [Chipathon 2026](Chipathon%202026.md) for official phase definitions.
 
@@ -24,16 +24,16 @@ gantt
     Python golden reference model        :crit, vf1,  2026-05-09, 28d
 
     section DSP Implementation
-    ΣΔ Decimator ×4 (CIC + FIR)         :rx1,  2026-05-09, 21d
+    ΣΔ Decimator ×4 (CIC + FIR)         :rx1,  2026-05-17, 21d
     Energy Measurement (in SC path)     :rx2,  2026-05-09, 14d
     Correlator Bank ×8                   :crit, rx3,  2026-05-09, 28d
     FFT Engine (iterative radix-2)       :crit, rx4,  2026-05-09, 42d
-    ΣΔ Re-modulator ×2                   :rx6,  2026-05-09, 14d
+    ΣΔ Re-modulator ×2                   :rx6,  2026-05-17, 14d
 
     section Control Plane
     AHB-Lite Bus                         :cb4,  2026-05-09, 10d
     IRQ Controller                       :cb3,  2026-05-23, 7d
-    SPI Master + Slave                   :cb1,  2026-05-09, 21d
+    SPI Master + Slave                   :cb1,  2026-05-17, 21d
     SRAM macro path / GF180 enablement   :crit, cm1,  2026-05-09, 21d
     PicoRV32 integration + arbiter       :crit, cm3,  2026-05-18, 21d
 
@@ -55,9 +55,10 @@ gantt
     FPGA synthesis, MIMO bring-up + OTA  :fp3,  2026-07-13, 28d
 
     section RF / Hardware
-    PCB schematic & layout               :hw2,  2026-05-09, 14d
-    PCB fabrication & assembly           :hw3,  2026-05-23, 14d
-    PCB bring-up                         :hw4,  2026-06-06, 14d
+    First test PCB design                :hw2,  2026-05-17, 7d
+    First test PCB fab + assembly        :hw3,  2026-05-24, 14d
+    First test PCB available (~3 weeks)  :milestone, hw4, 2026-06-07, 0d
+    PCB bring-up                         :hw5,  2026-06-07, 14d
 
     section Physical Design
     Trial synthesis + floorplan          :pd0,  2026-07-01, 21d
