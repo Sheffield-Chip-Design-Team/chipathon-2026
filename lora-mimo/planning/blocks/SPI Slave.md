@@ -15,6 +15,8 @@ SPI slave providing the RPi (SPI0 CS1) with:
 - firmware load access into the PicoRV32 unified 4 kB CPU SRAM at `0x0000`–`0x0FFF`
 
 > **Non-FFT path:** The FFT-era burst SRAM read feature is removed from the active architecture. This block does **not** need any interface to the legacy 544 kB Baseband SRAM. The active requirements are register access plus firmware load into CPU SRAM only.
+>
+> **Bus scope:** This block is **not** a general AHB-Lite bridge or bus master. Host SPI accesses terminate either in the register bank (`reg_*`) or in the dedicated CPU SRAM firmware-load / readback path (`fw_ld_*`). Arbitrary host peek/poke of the internal AHB-Lite address space is out of scope.
 
 ---
 
@@ -67,8 +69,8 @@ If Byte 0 is `0x7F`, the SPI slave does **not** treat it as a register address. 
 ```
 Byte 0: 0x7F                // escape
 Byte 1: opcode
-Byte 2: addr_hi[3:0]        // CPU SRAM byte address [11:8] in low nibble; high nibble = 0
-Byte 3: addr_lo[7:0]        // CPU SRAM byte address [7:0]
+Byte 2: addr_hi[3:0]        // start address bits [11:8] in low nibble; high nibble = 0
+Byte 3: addr_lo[7:0]        // start address bits [7:0]
 Byte 4: len_minus_1         // transfer length = 1..256 bytes
 Byte 5...: payload or dummy bytes depending on opcode
 ```
@@ -90,7 +92,7 @@ Byte 1: 0x01
 Byte 2: addr_hi
 Byte 3: addr_lo
 Byte 4: len_minus_1
-Bytes 5...(5+N-1): payload bytes written to CPU SRAM, auto-incrementing address
+Bytes 5...(5+N-1): payload bytes written to CPU SRAM, starting at the specified start address and auto-incrementing after each byte
 ```
 
 Semantics:
@@ -100,6 +102,7 @@ Semantics:
 - Writes beyond `0x0FFF` are ignored once the address reaches the top of the 4 kB CPU SRAM window.
 - Firmware writes are only permitted while `CPU_RESET[0] = 1`. Host software must assert `CPU_RESET` before issuing this command.
 - MISO returns `0x00` for all bytes of a write command.
+- The write command does not return an explicit success / fail status. The host confirms success by issuing opcode `0x02` readback for the same start address and length, then comparing returned bytes against the payload.
 
 ### Extended opcode `0x02` — firmware readback
 
@@ -111,7 +114,7 @@ Byte 1: 0x02
 Byte 2: addr_hi
 Byte 3: addr_lo
 Byte 4: len_minus_1
-Bytes 5...(5+N-1): host sends dummy bytes; MISO returns CPU SRAM bytes, auto-incrementing address
+Bytes 5...(5+N-1): host sends dummy bytes; MISO returns CPU SRAM bytes, starting at the specified start address and auto-incrementing after each byte
 ```
 
 Semantics:
@@ -177,6 +180,9 @@ sequenceDiagram
     H->>S: Normal write: 0x82 0x00
     Note over H,S: CPU_RESET = 0
 ```
+
+
+`HOST_CS` must stay asserted for the full header (5 bytes) plus all payload bytes. `fw_ld_we` pulses once per accepted byte; `fw_ld_addr` auto-increments. `MISO=0x00` throughout. If `HOST_CS` deasserts early, the command is aborted and any partial trailing byte is discarded.
 
 ---
 
