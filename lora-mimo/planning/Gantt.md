@@ -24,29 +24,29 @@ gantt
     Python golden reference model        :crit, vf1,  2026-05-09, 28d
 
     section DSP Implementation
-    ΣΔ Decimator ×4 (CIC + FIR)         :rx1,  2026-05-17, 21d
-    DC Removal ×4                        :rx0,  2026-05-17, 7d
-    Energy Measurement (in SC path)     :rx2,  2026-05-09, 14d
-    Correlator Bank ×8                   :crit, rx3,  2026-05-09, 28d
-    Training Accumulator                 :crit, rx4,  2026-05-17, 21d
+    ΣΔ Decimator ×4 (CIC + FIR)         :rx1,  2026-05-24, 21d
+    DC Removal ×4                        :rx0,  2026-05-24, 7d
+    Energy Measurement (in SC path)     :rx2,  2026-05-24, 14d
+    Correlator Bank ×8                   :crit, rx3,  2026-05-24, 28d
+    Training Accumulator                 :crit, rx4,  2026-05-24, 21d
     Weight Generation                    :crit, rx5,  2026-06-01, 14d
     Noise Floor Estimator                :rx7,  2026-06-01, 7d
-    ΣΔ Re-modulator ×2                   :rx6,  2026-05-17, 14d
+    ΣΔ Re-modulator ×2                   :rx6,  2026-05-24, 14d
 
     section Control Plane
-    AHB-Lite Bus                         :cb4,  2026-05-09, 10d
+    AHB-Lite Bus                         :cb4,  2026-05-24, 10d
     IRQ Controller                       :cb3,  2026-05-23, 7d
     SPI Master + Slave                   :cb1,  2026-05-17, 21d
-    Packet Control FSM                   :cb5,  2026-06-22, 7d
+    Packet Control FSM                   :cb5,  2026-05-24, 7d
     PSRAM Controller                     :cb6,  2026-06-01, 14d
-    SRAM macro path / GF180 enablement   :crit, cm1,  2026-05-09, 21d
+    SRAM macro path                      :crit, cm1,  2026-05-24, 21d
     SRAM macro BIST                      :cm2,  2026-05-30, 7d
     PicoRV32 integration + arbiter       :crit, cm3,  2026-05-18, 21d
 
     section Software
-    Bootloader + SX1257 startup          :fw0,  2026-05-09, 28d
+    Bootloader + SX1257 startup          :fw0,  2026-05-31, 28d
     AGC loop                             :fw4,  2026-06-15, 14d
-    RPi host driver + ASIC SPI config    :fw6,  2026-05-16, 21d
+    RPi host driver + ASIC SPI config    :fw6,  2026-06-01, 21d
     RPi ChirpStack integration + demo    :fw7,  2026-07-06, 21d
 
     section Verification + FPGA
