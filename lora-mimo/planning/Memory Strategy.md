@@ -8,43 +8,47 @@ Covers all on-chip SRAM in the design: macro selection, voltage domain, BIST, an
 
 | Instance | Size | Macro | VDD | Block |
 |---|---|---|---|---|
-| SRAM0 (ch0/ch1) | 512 B | `gf180mcu_ocd_ip_sram__sram512x8m8wm1` | 3.3 V | Frontend Buffer Controller |
-| SRAM1 (ch2/ch3) | 512 B | `gf180mcu_ocd_ip_sram__sram512x8m8wm1` | 3.3 V | Frontend Buffer Controller |
+| SRAM0 (ch0/ch1) | 512 B | `gf180mcu_fd_ip_sram__sram512x8m8wm1` | 3.3 V | Frontend Buffer Controller |
+| SRAM1 (ch2/ch3) | 512 B | `gf180mcu_fd_ip_sram__sram512x8m8wm1` | 3.3 V | Frontend Buffer Controller |
 | CPU SRAM (unified) | 4 KB | `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` ×4 | 3.3 V | PicoRV32 Integration |
 
 **Total on-chip SRAM: 5 KB**
 
 A single unified SRAM holds PicoRV32 `.text`, `.data`, `.bss`, and stack. No separate IMEM/DMEM split — one AHB-Lite port, one BIST instance. Linker places `.text` at `0x00000` and stack at `0x00FFF` (growing downward).
 
-**Area:** 4 × `sram1024x8m8wm1` = **~0.62 mm²**. Frontend Buffer adds 2 × `sram512x8m8wm1` = ~0.19 mm². Total SRAM area ~**0.81 mm²**.
+**Area:** Frontend Buffer uses 2 × `gf180mcu_fd_ip_sram__sram512x8m8wm1` = **~0.42 mm²** total based on the GF PDK physical dimensions (431.86 µm × 484.88 µm = 209400.2768 µm² each). CPU unified SRAM uses 4 × `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` = **~0.62 mm²** based on the experimental library dimensions currently referenced for the CPU memory plan. Total SRAM area under this mixed-library assumption is **~1.04 mm²**.
 
 ### Core voltage decision — 3.3 V
 
-**The core logic supply is 3.3 V.** All SRAM macros (`gf180mcu_ocd_ip_sram`) are 3.3 V devices. Running the core at 3.3 V places all logic and all SRAMs on the same rail, eliminating any need for level shifters at SRAM interfaces. It also allows `VDD_CORE` and `VDD_IO` to share a supply (both 3.3 V), simplifying the board power tree.
+**The core logic supply is 3.3 V.** The current memory plan intentionally uses a **mixed SRAM library strategy**: official GF `gf180mcu_fd_ip_sram` macros for the DSP/frontend buffer, and experimental `gf180mcu_ocd_ip_sram` macros for the CPU unified SRAM. All selected macros are intended to run at 3.3 V. Running the core at 3.3 V places all logic and all SRAMs on the same rail, eliminating any need for level shifters at SRAM interfaces. It also allows `VDD_CORE` and `VDD_IO` to share a supply (both 3.3 V), simplifying the board power tree.
 
 3.3 V standard cells have shorter propagation delay than 1.8 V equivalents (higher overdrive current), so timing closure at 32 MHz is expected to be straightforward for the combinational logic. The SRAM macros have a minimum cycle time of **55.6 ns** (~18 MHz) at 3.3 V — this is an intrinsic macro limit, not a voltage issue. AHB-Lite accesses to IMEM/DMEM therefore require a 2-cycle multi-cycle path constraint in the timing flow; PicoRV32's `mem_valid`/`mem_ready` handshake handles this naturally without a separate divided clock.
 
 ### SRAM macro source
 
-All macros are from the **`gf180mcu_ocd_ip_sram`** experimental library (https://github.com/RTimothyEdwards/gf180mcu_ocd_ip_sram). Physical dimensions:
+This plan currently mixes two SRAM sources by design:
 
-| Macro | Width | Height | Area |
-|---|---|---|---|
-| `sram256x8m8wm1` | 301.3 µm | 224.9 µm | ~0.068 mm² |
-| `sram512x8m8wm1` | 301.3 µm | 321.9 µm | ~0.097 mm² |
-| `sram1024x8m8wm1` | 301.3 µm | 515.8 µm | ~0.156 mm² |
+| Use | Library | Macro | Width | Height | Area |
+|---|---|---|---|---|---|
+| Frontend buffer | GF-provided SRAM | `gf180mcu_fd_ip_sram__sram512x8m8wm1` | 431.86 µm | 484.88 µm | ~0.209 mm² |
+| CPU unified SRAM | Experimental SRAM | `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` | 301.3 µm | 515.8 µm | ~0.156 mm² |
 
-Frontend Buffer uses 2 × `sram512x8m8wm1` = **~0.194 mm²**. IMEM and DMEM each use 32 × `sram1024x8m8wm1` = **~4.99 mm² each** — the dominant area contributor. Target firmware footprint is **2–4 KB** (IMEM) with a matching DMEM. At 4 KB each: 8 macros = ~1.25 mm². At 2 KB each: 4 macros = ~0.62 mm².
+The frontend-buffer estimate above uses the official GF PDK dimensions from the `gf180mcu_fd_ip_sram__sram512x8m8wm1` documentation. The CPU estimate uses the `gf180mcu_ocd_ip_sram` experimental library dimensions because the CPU memory plan is intentionally based on the experimental 3.3 V `1024x8` macros rather than the official GF SRAM family.
+
+Under that assumption:
+
+- Frontend Buffer uses 2 × `gf180mcu_fd_ip_sram__sram512x8m8wm1` = **~0.419 mm²**
+- CPU unified SRAM uses 4 × `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` = **~0.625 mm²**
 
 ---
 
 ## Rationale for the split
 
-### DSP SRAMs — experimental macros at 3.3 V
+### DSP SRAMs — GF-provided 512x8 macros at 3.3 V
 
 The Frontend Buffer SRAMs (SRAM0, SRAM1) are in the real-time acquisition critical path. A single stuck bit causes a corrupt delayed-sample read, which degrades the SC autocorrelation statistic and can prevent preamble detection entirely. There is no runtime recovery path short of resetting the block.
 
-The `sram512x8m8wm1` macro size exactly matches the required 2-channel × 128-sample rolling window at 8-bit storage. No level shifters are required — core logic and SRAM share the 3.3 V rail.
+The `gf180mcu_fd_ip_sram__sram512x8m8wm1` macro size exactly matches the required 2-channel × 128-sample rolling window at 8-bit storage. No level shifters are required — core logic and SRAM share the 3.3 V rail.
 
 The 55.6 ns SRAM cycle time is not a concern for the frontend buffer: the ΣΔ decimated sample rate (125 kS/s–1 MS/s) is far below 18 MHz. The buffer controller issues at most one SRAM access per decimated sample; no multi-cycle constraint is needed here.
 

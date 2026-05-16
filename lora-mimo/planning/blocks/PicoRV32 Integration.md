@@ -200,7 +200,9 @@ void irq_handler() {
 }
 ```
 
-`ALPHA_SHIFT` is a firmware compile-time constant. To disable averaging set `ALPHA_SHIFT=0`. No N0 averaging is needed — the non-FFT path does not estimate per-branch noise variance.
+`ALPHA_SHIFT` is a firmware compile-time constant. To disable averaging set `ALPHA_SHIFT=0`.
+
+Per-branch noise floor estimation is handled by the **Noise Floor Estimator** RTL block (see [Noise Floor Estimator](Noise%20Floor%20Estimator.md)), not by firmware. Firmware uses the hardware estimates via `SIGMA2_SRC=HW` (default) or supplies override values via `SIGMA2_SHADOW` registers if needed.
 
 **Timing:** Weight computation (MRC path including 1/S division) ~50 cycles at 32 MHz. Budget from `training_done` to payload start is ~70,400 cycles at SF6/125 kHz — margin >1000×.
 
@@ -300,10 +302,10 @@ void agc_update() {
 
 | Address | Region | Size | Macro | Notes |
 | --- | --- | --- | --- | --- |
-| `0x00000` | Unified SRAM (text + data + stack) | 4 KB | `sram1024x8m8wm1` ×4 | Loaded by host via SPI; `.text` at low addresses, `.data`/`.bss`/stack at high addresses |
+| `0x00000` | Unified SRAM (text + data + stack) | 4 KB | `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` ×4 | Loaded by host via SPI; `.text` at low addresses, `.data`/`.bss`/stack at high addresses |
 | `0x01000` | AHB-Lite peripherals | — | — | Register bank, SPI master, IRQ, JTAG |
 
-A single unified SRAM replaces separate IMEM and DMEM. The linker places `.text` at `0x00000` and `.data`/`.bss`/stack at the top of the 4 KB window. One AHB-Lite port, one BIST instance. See [Memory Strategy](../Memory%20Strategy.md) for macro selection and BIST architecture.
+A single unified SRAM replaces separate IMEM and DMEM. The linker places `.text` at `0x00000` and `.data`/`.bss`/stack at the top of the 4 KB window. One AHB-Lite port, one BIST instance. This CPU memory uses the experimental `gf180mcu_ocd_ip_sram` library, while the DSP/frontend buffer uses the official GF `gf180mcu_fd_ip_sram` 512x8 macros; see [Memory Strategy](../Memory%20Strategy.md) for the mixed-library rationale and BIST architecture.
 
 ---
 

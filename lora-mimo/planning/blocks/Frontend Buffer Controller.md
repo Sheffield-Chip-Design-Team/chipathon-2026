@@ -287,7 +287,7 @@ SC correlator enable gated by `buf_valid`.
 
 ## BIST
 
-SRAM0 and SRAM1 use **`gf180mcu_fd_ip_sram__sram512x8m8wm1`** — the silicon-proven GF180MCU PDK macro (512 words × 8 bits, "5V Green" transistor class, operating range 1.62 V – 5.50 V). Both macros are operated at **1.8 V**, placing them on the same supply rail as the digital logic with no level shifters required. A fault here corrupts the SC delayed-sample path with no runtime recovery, so BIST runs at power-on before acquisition mode is entered. See [Memory Strategy](../Memory%20Strategy.md) for the full BIST and fallback architecture.
+SRAM0 and SRAM1 use **`gf180mcu_fd_ip_sram__sram512x8m8wm1`** — the silicon-proven GF180MCU PDK macro (512 words × 8 bits, "5V Green" transistor class, operating range 1.62 V – 5.50 V). Both macros are operated at **3.3 V**, placing them on the same supply rail as the digital logic with no level shifters required. A fault here corrupts the SC delayed-sample path with no runtime recovery, so BIST runs at power-on before acquisition mode is entered. See [Memory Strategy](../Memory%20Strategy.md) for the full BIST and fallback architecture.
 
 March-5N write/read pattern on each 512 B macro independently, controlled by the BIST controller block. Pass/fail only — individual bad-word address reporting is not needed for the degraded-mode policy.
 

@@ -8,7 +8,7 @@ GF180MCU MIMO ASIC — logical pad list. Physical pad numbers and positions are 
 
 ## Signal pads (22)
 
-All signal pads use 3.3V IO cells (VDD_IO supply). Core logic runs at 1.8V; level translation is internal to the IO ring.
+All signal pads use **GF180 5V-capable IO cells** from the chipathon padring library, operated on a **3.3V `VDD_IO` rail** to match the SX1257/SX1302/RPi board interfaces. Core logic runs at **3.3V**, so no internal level translation is required between the core and SRAM domains.
 
 ### RX data from SX1257 (8 pads, input)
 
@@ -99,8 +99,8 @@ All four pads are dual-function, controlled by the `JTAG_EN` config bit (default
 
 | Pad name | Voltage | Count | Notes |
 |---|---|---|---|
-| `VDD_IO` | 3.3V | 1 | Powers all IO cells. SX1257 SPI, IQ data, and SX1302 interfaces are 3.3V CMOS. |
-| `VDD_CORE` | 1.8V | 1 | Core digital supply. Single pad — IR drop must be verified in floorplan. |
+| `VDD_IO` | 3.3V | 1 | Powers GF180 5V-capable padring cells in 3.3V operation. External SX1257 SPI, IQ data, and SX1302 interfaces are 3.3V CMOS. |
+| `VDD_CORE` | 3.3V | 1 | Core digital + SRAM supply. Single pad — IR drop must be verified in floorplan. |
 | `GND` | 0V | 1 | Ground. Single pad — placement should favour the highest switching-current region. |
 
 ---
@@ -117,7 +117,7 @@ All four pads are dual-function, controlled by the `JTAG_EN` config bit (default
 | RESETB | 1 |
 | **Signal subtotal** | **22** |
 | VDD_IO (3.3V) | 1 |
-| VDD_CORE (1.8V) | 1 |
+| VDD_CORE (3.3V) | 1 |
 | GND | 1 |
 | **Supply/ground subtotal** | **3** |
 | **Total** | **25** |
@@ -146,4 +146,5 @@ The following signals are board-level only — no ASIC pad allocated:
 - Resolve SE2435L_3/4 CPS control source before PCB layout — `TMS_GPIO0` (GPIO_0) and `TDI_GPIO1` (GPIO_1) are candidates for control signals
 - Resolve SX1257 RESET (floating vs. RPi-controlled) before PCB layout
 - **IR drop verification required** — single VDD_CORE and single GND pad; floorplan must place power pad near highest switching-current block (ΣΔ decimators or PicoRV32) and rely on on-chip power mesh; may need decoupling capacitor cells near critical blocks
+- **Pad-library assumption** — chipathon integration documentation provides 5V-capable GF180 IO cells, not native 3.3V-only pad cells; current plan is to run those pads from a 3.3V `VDD_IO` rail for 3.3V board signaling, accepting any speed impact noted by the integration team
 - **Consider power ring strategy** — GF180MCU IO ring includes power rails; confirm whether VDD_CORE/GND pads feed a global ring or require explicit mesh routing in the core

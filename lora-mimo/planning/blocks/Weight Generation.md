@@ -344,16 +344,46 @@ Software path (PicoRV32): IRQ response + firmware execution adds ~1,000–5,000 
 ## Known Limitations
 
 - **ALMMSE is software-only.** Matrix inversion for a 4×2 system is not hardened. `WGT_SRC` must be SW for ALMMSE. The hardware FSM still runs and writes W_HW (MRC result) as a diagnostic.
-- **No per-branch noise weighting.** True MRC uses `w_j = conj(h_j) / σ²_j`. This block uses equal per-branch noise assumption. Suboptimal if branch noise levels differ significantly (e.g. one antenna partially obstructed).
+- **No per-branch noise weighting in hardware path.** The hardware FSM uses an equal per-branch noise assumption. NW-MRC (`w_j = conj(Z_j) / σ²_j`) is available via the SW path using estimates from the Noise Floor Estimator block. See noise floor estimation section below.
 - **Calibration is static.** Per-branch coefficients do not update at runtime. Temperature drift requires manual SPI recalibration.
 - **EMA smoothing is firmware responsibility.** Hardware computes fresh per-packet weights only. Cross-packet smoothing (EMA) must be implemented in firmware using the W_HW readback path.
 - **Same-packet application requires WGT_AUTO_COMMIT=1.** If firmware scheduling is delayed (e.g. busy with AGC), the hardware path fires deterministically but the software path may miss the payload window.
 
 ---
 
+## Per-branch noise floor estimation
+
+Per-branch noise power estimates `σ²_j` are produced by the **Noise Floor Estimator** RTL block. The block runs a per-branch EMA on idle symbol-window energies gated by the Packet Control FSM (`noise_sample_en`).
+
+See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the full block spec including interface, fixed-point format, and verification plan.
+
+### How estimates reach the weight computation path
+
+The active estimates `sigma2_active_j[0..3]` are driven by the NFE block onto a dedicated bus, selectable by `SIGMA2_SRC`:
+
+- **`SIGMA2_SRC=HW`** (default): hardware EMA output — updated automatically each valid idle symbol
+- **`SIGMA2_SRC=SW`**: firmware-supplied values via `SIGMA2_SHADOW` registers and `SIGMA2_COMMIT` strobe — same shadow/commit pattern as `W_SHADOW`/`W_COMMIT`
+
+### NW-MRC weight formula (SW path)
+
+Once `sigma2_active_j` is valid (`sigma2_valid=1`), firmware computes NW-MRC via `WGT_SRC=SW`:
+
+```
+w_j = conj(Z_j) / sigma2_active_j
+```
+
+When `sigma2_j` is equal across branches this is exactly proportional to plain MRC. When branches differ, high-noise branches are suppressed. See [sim/models/weight_generation.py](../../sim/models/weight_generation.py) — `compute_nw_mrc_weights()`.
+
+Note: the per-branch MMSE form `conj(Z_j) / (|Z_j|² + sigma2_j * n_acc)` gives a signal-dependent denominator per branch and does **not** reduce to plain MRC even with equal noise — it is a different estimator and should not be confused with NW-MRC.
+
+The hardware path (`WGT_SRC=AUTO`) continues to use the equal-noise approximation and remains available as a fallback if `sigma2_valid=0`.
+
+---
+
 ## Related Blocks
 
 - [Training Accumulator](Training%20Accumulator.md) — provides `Z_j`, `n_acc`, `training_done`
+- [Noise Floor Estimator](Noise%20Floor%20Estimator.md) — provides `sigma2_active_j` for NW-MRC
 - [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — consumes `W_ACTIVE` at sample rate
 - [Packet Control FSM](Packet%20Control%20FSM.md) — receives `W_COMMIT`, manages `safe_switch`
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — software path; reads `Z_j`, `W_HW` via register map; writes `W_SHADOW`

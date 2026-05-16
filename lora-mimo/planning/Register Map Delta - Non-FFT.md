@@ -160,6 +160,34 @@ Per-branch static gain/phase calibration coefficients applied before weight comp
 | `0xD2` | `CAL_3_Q_HI` | R/W | `0x00` | Branch 3 calibration Q [15:8] |
 | `0xD3` | `CAL_3_Q_LO` | R/W | `0x00` | Branch 3 calibration Q [7:0] |
 
+### `0xDE`–`0xF2` — Noise Floor Estimator (new)
+
+| Address | Name | R/W | Reset | Description |
+|---|---|---|---|---|
+| `0xDE` | `NFE_CTRL` | R/W | `0x04` | [0] `SIGMA2_SRC`: 0=HW (default), 1=SW override; [3:1] `NOISE_ALPHA_SHIFT`: EMA decay exponent (default 4 → α=1/16); [7:4] reserved |
+| `0xDF` | `NFE_STATUS` | R | `0x00` | [0] `SIGMA2_VALID`: at least one idle window accumulated since reset or AGC gain change; [7:1] reserved |
+| `0xE0` | `NOISE_THRESH_HI` | R/W | `0x00` | Near-far guard threshold [15:8]; energy above this suppresses noise update |
+| `0xE1` | `NOISE_THRESH_LO` | R/W | `0x00` | Near-far guard threshold [7:0]; recommended: AGC_TARGET / 8 |
+| `0xE2` | `SIGMA2_0_HW_HI` | R | `0x00` | Branch 0 hardware EMA estimate [15:8] UQ2.14 |
+| `0xE3` | `SIGMA2_0_HW_LO` | R | `0x00` | Branch 0 hardware EMA estimate [7:0] |
+| `0xE4` | `SIGMA2_1_HW_HI` | R | `0x00` | Branch 1 hardware EMA estimate [15:8] |
+| `0xE5` | `SIGMA2_1_HW_LO` | R | `0x00` | Branch 1 hardware EMA estimate [7:0] |
+| `0xE6` | `SIGMA2_2_HW_HI` | R | `0x00` | Branch 2 hardware EMA estimate [15:8] |
+| `0xE7` | `SIGMA2_2_HW_LO` | R | `0x00` | Branch 2 hardware EMA estimate [7:0] |
+| `0xE8` | `SIGMA2_3_HW_HI` | R | `0x00` | Branch 3 hardware EMA estimate [15:8] |
+| `0xE9` | `SIGMA2_3_HW_LO` | R | `0x00` | Branch 3 hardware EMA estimate [7:0] |
+| `0xEA` | `SIGMA2_0_SW_HI` | R/W | `0x00` | Branch 0 SW shadow [15:8]; written by firmware before SIGMA2_COMMIT |
+| `0xEB` | `SIGMA2_0_SW_LO` | R/W | `0x00` | Branch 0 SW shadow [7:0] |
+| `0xEC` | `SIGMA2_1_SW_HI` | R/W | `0x00` | Branch 1 SW shadow [15:8] |
+| `0xED` | `SIGMA2_1_SW_LO` | R/W | `0x00` | Branch 1 SW shadow [7:0] |
+| `0xEE` | `SIGMA2_2_SW_HI` | R/W | `0x00` | Branch 2 SW shadow [15:8] |
+| `0xEF` | `SIGMA2_2_SW_LO` | R/W | `0x00` | Branch 2 SW shadow [7:0] |
+| `0xF0` | `SIGMA2_3_SW_HI` | R/W | `0x00` | Branch 3 SW shadow [15:8] |
+| `0xF1` | `SIGMA2_3_SW_LO` | R/W | `0x00` | Branch 3 SW shadow [7:0] |
+| `0xF2` | `SIGMA2_COMMIT` | W | `0x00` | Write 1 to latch SW shadow into active SW estimate; self-clears next cycle. Has no effect when `SIGMA2_SRC=HW`. |
+
+---
+
 ### SC debug registers — relocated
 
 Existing SC debug registers `0xD0`–`0xD9` conflict with the calibration extension above. Relocate to `0xD4`–`0xDD`:
@@ -200,4 +228,5 @@ Existing SC debug registers `0xD0`–`0xD9` conflict with the calibration extens
 | `0xCA`–`0xCD` | SX1257 pass-through — unchanged |
 | `0xCE`–`0xD3` | Calibration coefficients branches 2 Q – 3 Q |
 | `0xD4`–`0xDD` | SC bring-up debug (relocated from `0xD0`–`0xD9`) |
-| `0xDE`–`0xFF` | Reserved |
+| `0xDE`–`0xF2` | Noise Floor Estimator control and readback (new) |
+| `0xF3`–`0xFF` | Reserved |

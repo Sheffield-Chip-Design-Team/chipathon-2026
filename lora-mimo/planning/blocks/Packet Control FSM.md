@@ -37,7 +37,7 @@ IDLE ──────────────► PREAMBLE_ACQ
 
 | State | Entry condition | Active behaviour | Exit condition |
 |---|---|---|---|
-| `IDLE` | Reset; packet end; timeout | `safe_switch=1`; promote `W_SHADOW→W_ACTIVE` if `W_commit_pending`; unfreeze FRONTEND_BUF | `sc_lock` |
+| `IDLE` | Reset; packet end; timeout | `safe_switch=1`; promote `W_SHADOW→W_ACTIVE` if `W_commit_pending`; unfreeze FRONTEND_BUF; assert `noise_sample_en` each symbol period while `energy_j < NOISE_THRESH` and `!sc_lock` | `sc_lock` |
 | `PREAMBLE_ACQ` | `sc_lock` | Latch `timing_ref`, `ACTIVE_MODE`, `ACTIVE_ANTENNA_EN`; freeze FRONTEND_BUF; combiner=bypass; raise `IRQ_CORR_LOCK` | `training_done` or preamble timeout |
 | `W_PENDING` | `training_done` | Raise `IRQ_TRAINING_DONE`; weight gen computes and writes `W_SHADOW`; combiner stays bypass | `W_commit` or payload-start timeout |
 | `PAYLOAD_ACTIVE` | Payload phase begins | Combiner = `W_ACTIVE` if `W_valid`, else bypass; set `W_MISSED_PACKET` if W was not committed before this state | `packet_end` or timeout |
@@ -154,6 +154,8 @@ The buffer is frozen from sc_lock until packet end so that the 2-symbol acquisit
 | `packet_active` | out | 1 | Packet FSM not in IDLE |
 | `active_mode` | out | 2 | Latched combining mode for current packet |
 | `active_antenna_en` | out | 4 | Latched antenna mask for current packet |
+| `noise_sample_en` | out | 1 | Pulses once per symbol in IDLE when `!sc_lock` and all `energy_j < NOISE_THRESH`; triggers `IRQ_NOISE_SAMPLE` |
+| `noise_thresh` | in | 16 | Per-branch energy threshold below which idle energy is treated as noise floor; from `NOISE_THRESH` register |
 
 ---
 
@@ -165,6 +167,25 @@ The buffer is frozen from sc_lock until packet end so that the 2-symbol acquisit
 | `IRQ_TRAINING_DONE` | PREAMBLE_ACQ → W_PENDING | PicoRV32 (firmware weight path) or debug |
 | `IRQ_W_MISSED_PACKET` | W_MISSED_PACKET set | Debug / threshold tuning |
 | `IRQ_PACKET_DONE` | Any → IDLE | Debug / host visibility |
+
+---
+
+## Per-branch noise floor estimation
+
+While in IDLE, the FSM asserts `noise_sample_en` once per symbol window when both conditions hold:
+
+1. `sc_lock` has not fired (no preamble detected)
+2. All per-branch `energy_j < NOISE_THRESH` (near-far guard)
+
+`noise_sample_en` is consumed directly by the **Noise Floor Estimator** RTL block, which updates the per-branch EMA automatically. The FSM does not maintain any EMA state.
+
+`NOISE_THRESH` is a register-configurable value; recommended starting point is `AGC_TARGET / 8` (−9 dB below AGC target).
+
+The FSM hardware contribution is:
+- Assert `noise_sample_en` at the symbol boundary when both conditions are met
+- `NOISE_THRESH` register input (from `NFE_CTRL` / `NOISE_THRESH` registers)
+
+See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the EMA block spec.
 
 ---
 
@@ -195,6 +216,9 @@ The buffer is frozen from sc_lock until packet end so that the 2-symbol acquisit
 | Mode shadow write mid-packet | Write mode_shadow during PAYLOAD_ACTIVE | active_mode unchanged until IDLE; shadow value promoted at safe_switch |
 | No backpressure | Packet arrives during W_PENDING | iq_valid path unaffected; combiner stays bypass |
 | buf_freeze timing | Check FRONTEND_BUF control | buf_freeze asserts at sc_lock, deasserts at packet end |
+| Noise sample, quiet channel | IDLE, inject noise-only signal below NOISE_THRESH, no sc_lock | `noise_sample_en` pulses once per symbol; `IRQ_NOISE_SAMPLE` fires |
+| Noise sample suppressed, near-far | IDLE, inject signal above NOISE_THRESH, no sc_lock | `noise_sample_en` does not pulse; no IRQ |
+| Noise sample suppressed, sc_lock | IDLE → PREAMBLE_ACQ mid-symbol | `noise_sample_en` suppressed from the symbol where sc_lock fires |
 
 ---
 
