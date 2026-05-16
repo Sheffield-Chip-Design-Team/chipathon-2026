@@ -20,6 +20,12 @@ i.e. full MRC gain with h_ref as a common phase rotation (handled by SX1302).
 """
 
 import numpy as np
+from .weight_generation import (
+    WeightGenerator,
+    shift_normalise,
+    apply_calibration as _apply_calibration,
+    compute_weights_hw,
+)
 
 
 def chirp_reference(M: int) -> np.ndarray:
@@ -98,16 +104,8 @@ def apply_calibration(
     Z_j: np.ndarray,
     cal_j: np.ndarray | None,
 ) -> np.ndarray:
-    """
-    Apply per-branch static gain/phase calibration.
-
-    H_j_cal = Z_j * conj(cal_j)
-
-    cal_j : (NR,) complex calibration coefficients (default 1+0j = bypass).
-    """
-    if cal_j is None:
-        return Z_j.copy()
-    return Z_j * np.conj(cal_j)
+    """Thin wrapper — canonical implementation is weight_generation.apply_calibration."""
+    return _apply_calibration(Z_j, cal_j)
 
 
 def compute_weights(
@@ -119,61 +117,23 @@ def compute_weights(
     """
     Compute combining weights from training accumulator output.
 
+    Delegates to WeightGenerator which models the full hardware FSM:
+    SHIFT (int64→int32) → CALIBRATE → COMPUTE → SCALE (Q1.15).
+
     Parameters
     ----------
     Z_j       : (NR,) complex cross-correlation estimates from training_accumulate()
     mode      : 'mrc' | 'egc' | 'sc' | 'bypass'
     antenna_en: bitmask of enabled antennas (bit 0 = antenna 0)
-    cal_j     : (NR,) complex calibration coefficients, or None
+    cal_j     : (NR,) complex Q1.15 calibration coefficients, or None
 
     Returns
     -------
     w : (NR,) complex Q1.15 weights
-
-    Notes
-    -----
-    Z_j ≈ h_j · conj(h_ref) · n_acc.  Division by n_acc cancels in all
-    weight ratios.  The common h_ref factor also cancels: conj(Z_j) =
-    conj(h_j) · h_ref, and h_ref is a common scalar across all branches.
     """
-    from .fixed import quantize_q1_15
-
-    NR = len(Z_j)
-    mask = np.array([(antenna_en >> j) & 1 for j in range(NR)], dtype=bool)
-
-    H_j = apply_calibration(Z_j, cal_j)
-    H_j[~mask] = 0.0
-
-    if mode == "bypass":
-        w = np.zeros(NR, dtype=complex)
-        enabled = np.flatnonzero(mask)
-        if len(enabled):
-            w[enabled[0]] = 1.0
-        return w
-
-    if mode == "sc":
-        mag_sq = np.abs(H_j) ** 2
-        mag_sq[~mask] = -1.0
-        j_best = int(np.argmax(mag_sq))
-        w = np.zeros(NR, dtype=complex)
-        if mask[j_best]:
-            w[j_best] = 1.0
-        return w
-
-    if mode == "egc":
-        mag = np.abs(H_j)
-        w = np.where(mag > 0, np.conj(H_j) / np.where(mag > 0, mag, 1.0), 0j)
-        w[~mask] = 0.0
-        return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
-
-    if mode == "mrc":
-        S = float(np.sum(np.abs(H_j) ** 2))
-        if S == 0:
-            return np.zeros(NR, dtype=complex)
-        w = np.conj(H_j) / S
-        return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
-
-    raise ValueError(f"Unknown combining mode: {mode!r}. Use 'mrc', 'egc', 'sc', or 'bypass'.")
+    wgen = WeightGenerator(mode=mode, antenna_en=antenna_en, cal_j=cal_j)
+    w, _ = wgen.process(Z_j)
+    return w
 
 
 def cfo_diagnostic(Z_j: np.ndarray) -> float:
