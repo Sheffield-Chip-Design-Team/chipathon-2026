@@ -270,5 +270,5 @@ The chirp-ref path remains viable if absolute `h_j` is required for a future fea
 - [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — holds rolling sample history; training accumulator reads from the decimator directly, not from SRAM
 - [Correlator Bank (SC)](Correlator%20Bank.md) — provides `sc_lock`, `timing_ref`
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — provides `raw_j` and `iq_valid`
-- Weight Generation — consumes `Z_j` and `n_acc`; block spec TBD
+- [Weight Generation](Weight%20Generation.md) — consumes `Z_j` and `n_acc`; dual hardware/software path
 - Register Map — `TACC_REF_SEL[1:0]` field selects reference branch

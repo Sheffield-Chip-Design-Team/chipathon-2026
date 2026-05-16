@@ -26,6 +26,20 @@ It does **not** own:
 
 ---
 
+## Sample Rate
+
+The decimator delivers samples at **125 kS/s** (32 MHz / R=256, 1× Nyquist — see [ΣΔ Decimator](ΣΔ%20Decimator.md)). At SF6 (M = 2^6 = 64 samples/symbol) and 32 MHz system clock:
+
+```
+iq_valid period  = 32 MHz / 125 kS/s = 256 clock cycles
+Symbol period    = 64 × 256 = 16,384 cycles = 512 µs
+Buffer depth     = 128 sample times = 2 symbols  (8-bit storage)
+```
+
+Samples/symbol = 2^SF exactly for all SF at 1× Nyquist — no fractional timing.
+
+---
+
 ## Memory Organisation
 
 Two single-port SRAM macros of 512 B each:
@@ -39,14 +53,25 @@ Both macros share a common write pointer. All four channels for the same sample 
 
 ### Physical word organisation
 
-Each 512 B macro stores **two channels** — one complete IQ sample per channel per word:
+The `gf180mcu_fd_ip_sram__sram512x8m8wm1` macro is **8-bit wide** (512 words × 8 bits). Each sample time for two channels (I+Q per channel = 4 bytes) occupies **4 consecutive SRAM addresses**:
 
 ```
-SRAM0 word at address k:  { ch1_Q[7:0], ch1_I[7:0], ch0_Q[7:0], ch0_I[7:0] }   (8-bit mode)
-SRAM1 word at address k:  { ch3_Q[7:0], ch3_I[7:0], ch2_Q[7:0], ch2_I[7:0] }   (8-bit mode)
+SRAM0, physical addresses 4k .. 4k+3  (sample time k, channels 0 & 1):
+  4k+0:  ch0_I[7:0]
+  4k+1:  ch0_Q[7:0]
+  4k+2:  ch1_I[7:0]
+  4k+3:  ch1_Q[7:0]
+
+SRAM1, physical addresses 4k .. 4k+3  (sample time k, channels 2 & 3):
+  4k+0:  ch2_I[7:0]
+  4k+1:  ch2_Q[7:0]
+  4k+2:  ch3_I[7:0]
+  4k+3:  ch3_Q[7:0]
 ```
 
-One SRAM access (one address) retrieves or stores the IQ pair for **both channels** on that macro simultaneously. This means a single read from SRAM0 + single read from SRAM1 delivers all four channel samples for a given sample time — matching the SC correlator's per-sample-time input requirement.
+k ranges 0 – 127, giving 128 sample times = 2 symbols at SF6. Physical address range: 0 – 511 (9-bit address A[8:0]).
+
+Four sequential single-byte accesses to one macro deliver the full two-channel IQ pair for one sample time. Both macros are accessed in lockstep (same address sequence each cycle), so all four channel bytes for a sample time are captured in 4 cycles total.
 
 ### Sample Width and Depth
 
@@ -54,12 +79,12 @@ Decimated samples are either **12-bit** or **16-bit** I+Q per channel (TBD — s
 
 **Word width per macro per sample time:**
 
-| Storage format | Bits per channel (I+Q) | Word width for 2 channels | Bytes per word | Depth in 512 B (SF6, M=64) |
-|---|---|---|---|---|
-| 8-bit I + 8-bit Q (truncated) | 16 bits | 32 bits | 4 B | 128 sample times = **2 symbols** ✓ |
-| 16-bit I + 16-bit Q | 32 bits | 64 bits | 8 B | 64 sample times = **1 symbol** ✗ |
+| Storage | Bytes / sample time (2 ch) | Max sample times in 512 B | Max SF (D=M, see below) |
+|---|---|---|---|
+| 8-bit I + 8-bit Q | 4 B | 128 | **SF7** (M=128) |
+| 16-bit I + 16-bit Q | 8 B | 64 | SF6 (M=64, exactly full — no margin) |
 
-At 8-bit storage each macro is 32 bits wide × 128 deep = 512 B. At 16-bit storage a 32-bit-wide macro would require 2 accesses per sample time (one per channel), halving effective throughput and still only reaching 1-symbol depth.
+At 8-bit storage the 512-word macro supports up to **SF7** using the D=M read-before-write access pattern described below. At 16-bit storage depth falls to 64 sample times, limiting operation to SF6 with no margin; a 2-kB buffer (4 macros) is required for 16-bit SF7.
 
 **The 2-symbol rolling window required for SC correlation only fits within 1 kB if samples are stored at 8-bit precision per component.**
 
@@ -95,43 +120,84 @@ Three paths to resolve the depth vs precision tradeoff:
 
 ---
 
-## Logical Address Space
+## Logical Address Space and Buffer Depth
 
-At depth `D` sample times (D = 128 for 8-bit, D = 64 for 16-bit):
+SC requires one M-sample-delayed copy of each branch — **D = M sample times** is the minimum buffer depth. The current sample arrives live from the decimator; only the delayed sample requires SRAM storage.
+
+### D = M — read-before-write (preferred, supports SF6 and SF7)
 
 ```
-write address:  wr_ptr mod D
-delayed address: (wr_ptr - M + 1) mod D    // one symbol ago, aligned to current sample
+D = M = 2^SF
+
+sample_ptr   =  wr_ptr mod D           // same address for read and write
+physical_base = 4 * sample_ptr         // byte 0 of the 4-byte group
 ```
 
-where `M = 2^SF` is the symbol length. At SF6, M = 64.
+Read and write target the **same physical addresses** each sample time. The read phase (capturing the M-old delayed sample) runs first; the write phase then overwrites those addresses with the current sample. Because reads complete before writes begin, the delayed sample is captured correctly before it is overwritten — no corruption.
 
-Both SRAM0 and SRAM1 use the same `wr_ptr` and are accessed in lockstep.
+At SF7: D = M = 128, physical addresses 0–511 (exactly the 512-word macro capacity).  
+At SF6: D = M = 64, physical addresses 0–255 (256 B used; 256 B unused).
+
+### D = 2M — separate read/write addresses (legacy; wastes half the buffer)
+
+```
+D = 2M
+
+sample_ptr_write   =  wr_ptr mod 2M
+sample_ptr_delayed = (wr_ptr - M) mod 2M   // M positions behind write
+
+physical_base_write   = 4 * sample_ptr_write
+physical_base_delayed = 4 * sample_ptr_delayed
+```
+
+Read and write addresses are M positions apart. At SF6: D = 128, physical addresses 0–511 (full macro). **At SF7: D = 256, requires 1024 B — does not fit in the 512 B macro.** This formulation is not needed and is not used in this implementation.
+
+### Address summary
+
+| SF | M | D (=M) | Physical byte range | Macro utilisation |
+|---|---|---|---|---|
+| 6 | 64 | 64 | 0–255 | 50% |
+| 7 | 128 | 128 | 0–511 | 100% |
+
+Both SRAM0 and SRAM1 use the same `wr_ptr` and physical address sequence, accessed in lockstep each cycle.
 
 ---
 
 ## Access Protocol
 
-The SRAM macros are **single-port write-after-read**. One read and one write occur per `iq_valid` sample time, in strict sequence.
+The `gf180mcu_fd_ip_sram__sram512x8m8wm1` is **single-port**. Each sample time requires 4 byte reads (delayed sample) followed by 4 byte writes (current sample) — **8 cycles total**, both macros in lockstep.
 
-At SF6 / 125 kHz, there are 256 clock cycles between `iq_valid` pulses at 32 MHz. The two-phase access completes well within this window.
+At 125 kS/s with a 32 MHz system clock there are **256 clock cycles** per `iq_valid` pulse. The 8-cycle access uses 3% of the available window.
 
-### Per-sample-time sequence
+### Per-sample-time sequence (D = M, read-before-write)
+
+With D = M, read and write target the **same** base address. Reads run first so the M-old delayed data is captured before it is overwritten.
 
 ```
-Cycle 0:  iq_valid asserts. Latch incoming raw sample from decimator.
-Cycle 1:  Apply read address = (wr_ptr - M + 1) mod D to SRAM0 and SRAM1.
-Cycle 2:  SRAM read data valid. Capture delayed samples for SC correlator.
-          (Read data is held until next iq_valid.)
-Cycle 3:  Apply write address = wr_ptr mod D. Apply write data = current sample.
-          Assert write enable on SRAM0 and SRAM1.
-Cycle 4:  Write completes.
-Cycle 5+: Idle until next iq_valid.
+Cycle 0:  iq_valid asserts. Latch incoming raw sample.
+            base = 4 * (wr_ptr mod M)    // same address for read and write
+
+Cycles 1–4:  Read phase (GWEN=1):
+  Cycle 1:  A = base+0.  Q → ch0_I_del (SRAM0),  ch2_I_del (SRAM1).
+  Cycle 2:  A = base+1.  Q → ch0_Q_del,           ch2_Q_del.
+  Cycle 3:  A = base+2.  Q → ch1_I_del,           ch3_I_del.
+  Cycle 4:  A = base+3.  Q → ch1_Q_del,           ch3_Q_del.
+            All 4 delayed bytes captured and held for SC correlator.
+
+Cycles 5–8:  Write phase (GWEN=0):
+  Cycle 5:  A = base+0.  D = ch0_I_cur (SRAM0),  ch2_I_cur (SRAM1).
+  Cycle 6:  A = base+1.  D = ch0_Q_cur,           ch2_Q_cur.
+  Cycle 7:  A = base+2.  D = ch1_I_cur,           ch3_I_cur.
+  Cycle 8:  A = base+3.  D = ch1_Q_cur,           ch3_Q_cur.
+
+Cycles 9+:  CEN=1 (macros idle) until next iq_valid.
 ```
 
-Write enable is never asserted simultaneously with a read to the same address. The delayed address and the write address are always separated by M sample times and therefore never alias within the 2M-depth buffer (provided D ≥ 2M, i.e. 8-bit storage mode).
+**Why read-before-write is safe.** The SRAM outputs the value stored at `base` on cycles 1–4 — this is the sample written M `iq_valid` periods ago (the desired delayed sample). The write on cycles 5–8 then replaces it with the current sample. The ordering is enforced by the GWEN signal: read (GWEN=1) completes before write (GWEN=0) begins. No data hazard.
 
-In 16-bit storage mode with D = M, the delayed address equals the write address. This is a hazard: the SRAM would read a sample that is about to be overwritten. This reinforces that 16-bit storage requires a deeper buffer (D ≥ 2M = 128 sample times → 2 kB).
+**Timing margin.** 8 active cycles + 248 idle cycles per `iq_valid`. The timing margin is identical at SF6 and SF7 — the sample rate (125 kS/s) and cycle budget (256 cycles) are independent of SF.
+
+**16-bit storage.** At 16-bit storage each sample time occupies 8 bytes. At SF7 (M=128): 128 × 8 = 1024 B per macro — exceeds the 512 B macro. 16-bit SF7 requires 4 macros (2 kB). 16-bit SF6: 64 × 8 = 512 B — exactly fits but leaves no headroom.
 
 ---
 
@@ -185,7 +251,7 @@ SC correlator enable gated by `buf_valid`.
 |---|---|---|---|
 | `clk` | in | 1 | 32 MHz system clock |
 | `rst_n` | in | 1 | Active-low reset |
-| `iq_valid` | in | 1 | Decimator sample strobe — one pulse per new sample time |
+| `iq_valid` | in | 1 | Decimator sample strobe — 125 kS/s, one pulse per 256 clock cycles at SF6 |
 | `sample_in[NR][W]` | in | 4×W | Incoming DC-removed samples, W = sample width (12 or 16 bit I+Q) |
 | `sf` | in | 3 | Spreading factor; sets M = 2^SF |
 | `sc_lock` | in | 1 | From SC detector; triggers freeze |
@@ -194,15 +260,17 @@ SC correlator enable gated by `buf_valid`.
 | `current_sample[NR][W]` | out | 4×W | Current sample (live, to SC and dechirp) |
 | `delayed_sample[NR][W]` | out | 4×W | Sample from M times ago (from SRAM, to SC) |
 | `delayed_valid` | out | 1 | Delayed sample read is valid this cycle |
-| `wr_ptr` | out | 7 | Current write pointer (7 bits for depth up to 128) |
-| `sram0_addr` | out | 7 | Address to SRAM0 |
-| `sram0_wdata` | out | 32 | Write data to SRAM0 (2 channels packed) |
-| `sram0_rdata` | in | 32 | Read data from SRAM0 |
-| `sram0_we` | out | 1 | Write enable to SRAM0 |
-| `sram1_addr` | out | 7 | Address to SRAM1 |
-| `sram1_wdata` | out | 32 | Write data to SRAM1 |
-| `sram1_rdata` | in | 32 | Read data from SRAM1 |
-| `sram1_we` | out | 1 | Write enable to SRAM1 |
+| `wr_ptr` | out | 7 | Current write pointer in sample-time units (0–127) |
+| `sram0_A` | out | 9 | Byte address to SRAM0 (A[8:0], 0–511) |
+| `sram0_D` | out | 8 | Write data byte to SRAM0 (D[7:0]) |
+| `sram0_Q` | in | 8 | Read data byte from SRAM0 (Q[7:0]) |
+| `sram0_CEN` | out | 1 | SRAM0 chip enable (active-low; 1 = idle) |
+| `sram0_GWEN` | out | 1 | SRAM0 global write enable (active-low; 0 = write, 1 = read) |
+| `sram1_A` | out | 9 | Byte address to SRAM1 |
+| `sram1_D` | out | 8 | Write data byte to SRAM1 |
+| `sram1_Q` | in | 8 | Read data byte from SRAM1 |
+| `sram1_CEN` | out | 1 | SRAM1 chip enable (active-low) |
+| `sram1_GWEN` | out | 1 | SRAM1 global write enable (active-low) |
 
 ---
 
@@ -210,21 +278,27 @@ SC correlator enable gated by `buf_valid`.
 
 | Parameter | Values | Notes |
 |---|---|---|
-| `SAMPLE_W` | 8, 12, 16 | Bit width per I or Q component. Storage width in SRAM may differ (see resolution options). |
-| `STORE_W` | 8 or 16 | Actual bits stored per component. 8 = truncated mode (2-symbol depth at 1 kB). 16 = full-precision (requires 2 kB for 2-symbol depth). |
+| `SAMPLE_W` | 8, 12, 16 | Bit width per I or Q component from decimator. |
+| `STORE_W` | 8 or 16 | Bits stored per component in SRAM after saturation/truncation. 8 = SF7 max. 16 = SF6 max (512 B exactly full, no margin). |
 | `NR` | 4 | Number of receive branches. |
-| `SF_MAX` | 6 | Maximum supported SF. Determines maximum `M` and therefore minimum required buffer depth. |
+| `SF_MAX` | 7 | Maximum supported SF with 8-bit storage and D=M read-before-write. SF8+ requires additional macros. |
 
 ---
 
 ## BIST
 
-At boot, before entering acquisition mode, both SRAM macros should be tested independently:
+SRAM0 and SRAM1 use **`gf180mcu_fd_ip_sram__sram512x8m8wm1`** — the silicon-proven GF180MCU PDK macro (512 words × 8 bits, "5V Green" transistor class, operating range 1.62 V – 5.50 V). Both macros are operated at **1.8 V**, placing them on the same supply rail as the digital logic with no level shifters required. A fault here corrupts the SC delayed-sample path with no runtime recovery, so BIST runs at power-on before acquisition mode is entered. See [Memory Strategy](../Memory%20Strategy.md) for the full BIST and fallback architecture.
 
-- March-style write/read pattern on each macro
-- Results exposed in status register: `SRAM0_BIST_PASS`, `SRAM1_BIST_PASS`
+March-5N write/read pattern on each 512 B macro independently, controlled by the BIST controller block. Pass/fail only — individual bad-word address reporting is not needed for the degraded-mode policy.
 
-Degraded-mode policy if one macro fails (per SF6 exploration doc):
+Results readable via SPI:
+
+| Register | Description |
+|---|---|
+| `SRAM0_BIST_PASS` | 1 = SRAM0 passed all March-5N patterns |
+| `SRAM1_BIST_PASS` | 1 = SRAM1 passed all March-5N patterns |
+
+Degraded-mode policy:
 
 | SRAM status | Operating mode |
 |---|---|
@@ -243,14 +317,15 @@ Degraded-mode policy if one macro fails (per SF6 exploration doc):
 
 3. **Post-lock observation mode needed?** The baseline non-FFT path does not require it. Include only if a sync/SFD timing confirmation step is added later.
 
-4. **Buffer depth parameterisation at higher SF?** At SF7 with 8-bit storage, M = 128 = full buffer depth → no room for 2-symbol window. The buffer is architecturally SF6-only under the 1 kB constraint. This is a known limitation.
+4. **SF8 and above?** SF8 requires M=256 sample times × 4 bytes = 1024 B per macro — exceeds the 512 B proven macro. SF8 support requires 4 macros (2 kB). No architectural blocker; just area cost.
 
 ---
 
 ## Known Limitations
 
-- Under a hard 1 kB budget with 8-bit storage: SF6 is the maximum operating point. SF7 and above require a larger buffer.
-- Under 16-bit storage with 1 kB: buffer depth is only 1 symbol — insufficient for SC. Requires 2 kB or truncation.
+- **SF7 is the maximum with 2 × 512 B macros and 8-bit storage.** At SF7 the macro is exactly full (D=M=128, 512 B used). The read-before-write access pattern is required — D=2M does not fit.
+- **SF8+ requires more macros.** SF8 needs D=M=256 → 1024 B per macro pair → 4 macros total (2 kB). No architectural change needed beyond adding macros and widening the address counter.
+- **16-bit storage at SF7 does not fit.** SF7 at 16-bit storage needs 1024 B per macro — requires 4 macros. SF6 at 16-bit exactly fills one macro with no margin.
 - Same-packet weight application is not supported by this buffer. Next-packet weights are the baseline.
 
 ---

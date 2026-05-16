@@ -39,7 +39,7 @@ Sequence:
 Important constraints:
 
 - no mid-packet gain changes
-- AGC is independent of the later `H_READY` / W-computation path
+- AGC is independent of the later `IRQ_TRAINING_DONE` / W-computation path
 - AGC is skipped during TX windows
 - between packets, gain stays frozen
 

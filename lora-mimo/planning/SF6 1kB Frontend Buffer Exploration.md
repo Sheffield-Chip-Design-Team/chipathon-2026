@@ -1,5 +1,10 @@
 # SF6 1kB Frontend Buffer Exploration
 
+> **Update — D=M read-before-write (see [Memory Strategy](Memory%20Strategy.md) and [Frontend Buffer Controller](blocks/Frontend%20Buffer%20Controller.md)):**
+> The original analysis below assumed a D=2M buffer (previous symbol + current symbol, 2M deep). That assumption was overly conservative. SC preamble detection only requires M samples of *stored* delay — the current sample arrives live from the decimator and is never read back from SRAM. Using a **D=M read-before-write** access pattern (read the M-old byte, then overwrite it with the current byte at the same address), the 2×512B macros support **SF7** (M=128, 128×4=512B exactly per macro). The "SF7 is severely constrained" conclusion below applies only to the D=2M model and is superseded.
+
+
+
 ## Goal
 
 Record the implications of a **hard `1 kB` DSP sample-memory budget** for a non-FFT LoRa frontend, with focus on whether `SF6` is a workable operating point.

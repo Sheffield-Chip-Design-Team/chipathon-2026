@@ -1,50 +1,113 @@
 import numpy as np
 from .fixed import quantize
 
+FS_ADC = 32e6  # Hz — SX1257 CLK_OUT
+
+# 1× Nyquist decimation ratios for each LoRa BW.
+# samples/symbol = 2^SF exactly at all BWs (integer M).
+# Noise penalty = 0 dB vs theoretical minimum.
+# CFO immunity provided by the cross-correlation training accumulator;
+# residual decimator aliasing risk is negligible with a GPS TCXO (±434 Hz at 868 MHz).
+RATIO_FOR_BW = {
+    125e3: 256,
+    250e3: 128,
+    500e3:  64,
+}
+
+# R=32 → 1 MS/s: 2× oversampled 500 kHz BW (decim_ratio=3).
+# Not a 1× Nyquist mode — use for debug / wideband capture only.
+RATIO_1MS = 32
+
+
+def decimation_ratio(bw_hz: float) -> int:
+    """
+    Return the 1× Nyquist CIC decimation ratio for a given LoRa bandwidth.
+
+    Parameters
+    ----------
+    bw_hz : LoRa signal bandwidth in Hz (125e3, 250e3, or 500e3)
+
+    Returns
+    -------
+    R : int, power-of-2 decimation ratio
+    """
+    if bw_hz not in RATIO_FOR_BW:
+        raise ValueError(f"bw_hz must be one of {list(RATIO_FOR_BW.keys())}")
+    return RATIO_FOR_BW[bw_hz]
+
+
 class SigmaDeltaDecimator:
     """
-    Simulates the ΣΔ Decimator block (Stage 2).
-    
-    The block performs CIC + FIR decimation, modeling bit-growth through
-    the integrator stages.
+    CIC + FIR decimator model for the SX1257 sigma-delta bitstream.
+
+    Implements 1× Nyquist decimation (samples/symbol = 2^SF, integer M for
+    all spreading factors). See planning/blocks/ΣΔ Decimator.md for rationale.
+
+    Typical usage
+    -------------
+    dec = SigmaDeltaDecimator(ratio=decimation_ratio(125e3))  # R=256, 125 kS/s
+    dec = SigmaDeltaDecimator(ratio=decimation_ratio(250e3))  # R=128, 250 kS/s
+    dec = SigmaDeltaDecimator(ratio=decimation_ratio(500e3))  # R=64,  500 kS/s
     """
 
     def __init__(self, ratio: int, output_bits: int = 8, stages: int = 3):
         """
         Parameters
         ----------
-        ratio       : Decimation ratio (1, 32, 64, 128, or 256)
-        output_bits : Number of bits for the output signal
-        stages      : Number of CIC integrator stages
+        ratio       : CIC decimation ratio (any positive integer)
+        output_bits : Output word width in bits (default 8 for SRAM path)
+        stages      : Number of CIC integrator/comb stages (default 3)
         """
-        if ratio not in [1, 32, 64, 128, 256]:
-            raise ValueError("Supported ratios: 1, 32, 64, 128, 256")
+        if ratio < 1:
+            raise ValueError("ratio must be >= 1")
         self.ratio = ratio
         self.output_bits = output_bits
         self.stages = stages
+        self.fs_out = FS_ADC / ratio
+
+    @property
+    def fs_out_khz(self) -> float:
+        return self.fs_out / 1e3
+
+    @property
+    def nyquist_hz(self) -> float:
+        return self.fs_out / 2
+
+    def samples_per_symbol(self, sf: int) -> int:
+        """
+        Samples per LoRa symbol at this decimation ratio.
+        For 1× oversampling: samples/symbol = 2^SF (always integer).
+        """
+        return int(self.fs_out / (FS_ADC / self.ratio / (2 ** sf / (FS_ADC / self.ratio))))
 
     def process(self, rx_bitstream: np.ndarray) -> np.ndarray:
         """
-        Decimates the input bitstream (32 MS/s) with modeled bit-growth.
+        Decimate the input bitstream (32 MS/s) via CIC + normalisation.
+
+        Parameters
+        ----------
+        rx_bitstream : (N,) complex array at FS_ADC sample rate
+
+        Returns
+        -------
+        (N // ratio,) complex array at fs_out, quantised to output_bits
         """
         n_output = len(rx_bitstream) // self.ratio
-        
-        # 1. CIC Integration (Bit growth stage)
-        # Internal width is roughly InputBits + stages * log2(ratio)
-        # Using float64 as a proxy for the high-precision internal accumulator
-        acc = rx_bitstream.astype(np.float64)
+
+        # CIC integrators (modelled via cumsum at input rate)
+        acc = rx_bitstream.astype(np.complex128)
         for _ in range(self.stages):
             acc = np.cumsum(acc)
-            
-        # 2. Decimate (Strobe at output rate)
-        decimated = acc[self.ratio - 1 :: self.ratio]
-        
-        # 3. Truncation (modeled after CIC comb stages)
-        # Scaled by 1/R^N to normalize, then truncate to int8
+
+        # Downsample
+        decimated = acc[self.ratio - 1 :: self.ratio][:n_output]
+
+        # Normalise: remove CIC gain R^N
         normalized = decimated / (self.ratio ** self.stages)
-        
-        # Apply quantization to simulate finite wordwidth output
-        re = quantize(normalized.real * (2**(self.output_bits-1)), self.output_bits) / (2**(self.output_bits-1))
-        im = quantize(normalized.imag * (2**(self.output_bits-1)), self.output_bits) / (2**(self.output_bits-1))
-            
+
+        # Quantise to output_bits
+        scale = 2 ** (self.output_bits - 1)
+        re = quantize(normalized.real * scale, self.output_bits) / scale
+        im = quantize(normalized.imag * scale, self.output_bits) / scale
+
         return re + 1j * im

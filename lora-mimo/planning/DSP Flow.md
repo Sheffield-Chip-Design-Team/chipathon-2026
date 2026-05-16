@@ -16,7 +16,7 @@ Two operating modes share the same hardware:
 | Stage | Block | Input | Output | Rate | Mode |
 | --- | --- | --- | --- | --- | --- |
 | 1 | SX1257 ΣΔ ADC (×4) | RF signal at each antenna | 1-bit I + 1-bit Q × 4 | 32 MS/s | All |
-| 2 | ΣΔ Decimator — CIC + FIR (×4) | 1-bit I+Q × 4 | int8–16 complex × 4 | **125–500 kS/s** | All |
+| 2 | ΣΔ Decimator — CIC + FIR (×4) | 1-bit I+Q × 4 | int8–16 complex × 4 | **125 kS/s – 1 MS/s** | All |
 | 3 | DC Removal (×4) | Full-precision complex × 4 | DC-removed complex × 4 | f_s | All |
 | 4 | Frontend Buffer Controller | DC-removed samples | current + M-delayed samples per branch | f_s | Mode 1 |
 | 5 | SC Preamble Detector | current + delayed samples | `sc_lock`, `timing_ref` | per 2 sym | Mode 1 |
@@ -52,11 +52,12 @@ remod_a_in = sign_extend(x[bypass_sel][n])
 
 Programmable CIC filter decimates the 32 MS/s bitstream to match the LoRa bandwidth. This ensures all downstream DSP blocks see exactly one symbol per 2^SF samples.
 
-| BW Selection | Ratio (R) | Sample Rate (f_s) |
-| --- | --- | --- |
-| 125 kHz | 256× | 125 kS/s |
-| 250 kHz | 128× | 250 kS/s |
-| 500 kHz | 64× | 500 kS/s |
+| BW Selection | Ratio (R) | Sample Rate (f_s) | decim_ratio | Notes |
+| --- | --- | --- | --- | --- |
+| 125 kHz | 256× | 125 kS/s | 0 | 1× Nyquist |
+| 250 kHz | 128× | 250 kS/s | 1 | 1× Nyquist |
+| 500 kHz | 64× | 500 kS/s | 2 | 1× Nyquist |
+| 500 kHz (2×) | 32× | 1 MS/s | 3 | 2× oversampled; debug / wideband capture |
 
 All ratios are power-of-2 — samples/symbol = 2^SF exactly for all SF and all BW settings (M is BW-independent). A 32-tap FIR compensation filter corrects sinc frequency droop. The entire downstream pipeline is clock-gated by the `iq_valid` strobe.
 
@@ -210,6 +211,7 @@ See [MRC Combiner](blocks/ALMMSE-MRC%20Combiner.md).
 | 125 kHz | 125 kS/s | 256 | > 130 dB |
 | 250 kHz | 250 kS/s | 128 | > 115 dB |
 | 500 kHz | 500 kS/s | 64 | > 100 dB |
+| 500 kHz (2×) | 1 MS/s | 32 | > 85 dB |
 
 All OSR values give SQNR far exceeding LoRa requirements. The int16 combiner output is conservative — the quantisation noise floor is negligible at all supported bandwidths.
 
@@ -228,6 +230,7 @@ The SX1257 analog roofing filter (`RegRxBw`, 0x0D) must be matched to the select
 | `0x02` | 125 kHz | 250 kHz (minimum setting) |
 | `0x01` | 250 kHz | 250 kHz |
 | `0x00` | 500 kHz | 500 kHz |
+| `0x03` | 500 kHz (1 MS/s) | 500 kHz |
 
 If the analog filter is left wider than the digital sampling rate, signals and noise above the Nyquist frequency alias directly into the LoRa band.
 
@@ -260,7 +263,7 @@ Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitiv
 
 | Constraint | Value | Impact |
 | --- | --- | --- |
-| Decimation ratios | R=256, 128, 64 | Native support for 125, 250, 500 kHz BW; power-of-2 ensures integer M for all SF |
+| Decimation ratios | R=256, 128, 64, 32 | Native support for 125, 250, 500 kHz BW (1×) plus 1 MS/s (2× / 500 kHz); power-of-2 ensures integer M for all SF |
 | SC detection window | 2M samples (current + M-delayed) | Buffer stores M samples (D=M); SC correlation spans 2M |
 | Training accumulation | ~5 symbols (SC_HITS_REQ=2) | ~2 dB loss vs ideal 8-symbol average; acceptable baseline |
 | Weight gen (hardware) | ~50 clock cycles | Same-packet application feasible at all supported SF |

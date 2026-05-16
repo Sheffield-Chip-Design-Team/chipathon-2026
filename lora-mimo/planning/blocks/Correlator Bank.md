@@ -53,6 +53,20 @@ where `current_j[n]` and `delayed_j[n]` are the current and M-sample-delayed raw
 
 ---
 
+## Sample Rate and Timing
+
+The decimator delivers samples at **f_s = 125 kS/s** (32 MHz / R=256, 1× Nyquist). At the 32 MHz system clock:
+
+```
+iq_valid period  = 256 clock cycles  (32 MHz / 125 kS/s)
+SF6  M = 64 samples/symbol → symbol period = 64 × 256 = 16,384 cycles = 512 µs
+SF7  M = 128                → symbol period = 32,768 cycles = 1,024 µs
+```
+
+Samples/symbol = 2^SF exactly for all SF (integer M — no fractional timing). All accumulator window lengths, timing back-calculations, and pointer arithmetic use integer M.
+
+---
+
 ## Function
 
 For each receive branch `j`, SC maintains a sliding-window complex autocorrelation over adjacent M-sample windows:
@@ -152,7 +166,7 @@ FRONTEND_BUF
 |---|---|---|---|---|
 | `clk` | in | 1 | 32 MHz | System clock |
 | `rst_n` | in | 1 | — | Active-low reset |
-| `iq_valid` | in | 1 | f_s | Sample strobe from decimator — used as clock enable |
+| `iq_valid` | in | 1 | 125 kS/s | Sample strobe from decimator (32 MHz / R=256) — used as clock enable |
 | `current_j[3:0]` | in | 4×2×8 | f_s | Current raw samples from FRONTEND_BUF (I+Q per branch, 8-bit saturated) |
 | `delayed_j[3:0]` | in | 4×2×8 | f_s | M-delayed raw samples from FRONTEND_BUF (I+Q per branch, 8-bit saturated) |
 | `delayed_valid` | in | 1 | f_s | FRONTEND_BUF delayed sample valid (gated until buffer has ≥ M samples) |
@@ -250,7 +264,7 @@ FRONTEND_BUF
 | Test | Method | Pass criterion |
 |---|---|---|
 | Noiseless lock | Pure upchirp preamble, NR=4, SF6 | `sc_lock` asserts within `N_hit + 1` symbols |
-| CFO immunity | Inject ε = ±10 kHz offset | `sc_lock` still asserts; timing_ref within ±3 samples |
+| CFO immunity | Inject ε = ±19 kHz (worst case: 20 ppm TX + 2 ppm RX gateway at 868 MHz) | `sc_lock` still asserts; timing_ref within ±3 samples |
 | Timing immunity | Random timing offset n₀ ∈ [0, M) | `sc_lock` asserts consistently |
 | False-alarm rate | White noise input, 10,000 windows | `sc_lock` rate < 0.1% |
 | Chirp-cancel equivalence | Compare raw-sample SC vs dechirped SC | Identical `sc_lock`, `timing_ref`, `c_j` values |

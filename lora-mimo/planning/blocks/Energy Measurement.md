@@ -28,9 +28,9 @@ So the architectural role is:
 
 | Port | Direction | Width | Rate | Description |
 | --- | --- | --- | --- | --- |
-| `iq_i[3:0]` | in | 4×(12–16) signed | 1 MS/s | I samples from all 4 decimators (full precision; width TBD) |
-| `iq_q[3:0]` | in | 4×(12–16) signed | 1 MS/s | Q samples from all 4 decimators |
-| `iq_valid` | in | 1 | 1 MS/s | Sample strobe from decimators |
+| `iq_i[3:0]` | in | 4×(12–16) signed | f_s | I samples from all 4 decimators (full precision; width TBD) |
+| `iq_q[3:0]` | in | 4×(12–16) signed | f_s | Q samples from all 4 decimators |
+| `iq_valid` | in | 1 | f_s | Sample strobe from decimators |
 | `clk_32m` | in | — | 32 MHz | Master clock |
 | `rst_n` | in | — | — | Active-low reset |
 | `energy[3:0]` | out | 4×16 unsigned | per symbol | Σ\|x\|² per antenna, latched at end of symbol window |
