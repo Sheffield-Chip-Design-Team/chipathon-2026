@@ -246,7 +246,7 @@ The reference branch samples `rx_r[n]` must be buffered for one clock cycle so a
 - **Early preamble symbols missed.** Approximately `(SC_HITS_REQ + 1)` preamble symbols are not accumulated. Training SNR is reduced by ~2 dB vs ideal (5 of 8 symbols with `SC_HITS_REQ = 2`).
 - **Relative estimates only (combining).** `Z_j` estimates `h_j · conj(h_ref)`, not `h_j` independently. This is sufficient for MRC/EGC/SC combining. Absolute per-branch magnitude is recovered from `E_ref` — see Recovering absolute channel magnitudes. N0 bias in `E_ref` affects ALMMSE at low SNR; a separate noise-floor estimate is needed to debias for that use case.
 - **Weak reference degrades all estimates.** If `h_ref ≈ 0`, all `Z_j` are noise-dominated. Mitigated by static `TACC_REF_SEL` pointing to the best-known antenna for the deployment.
-- **SF6 only under 1 kB SRAM constraint.** Accumulator register cost scales with NR only (not M), but the Frontend Buffer SRAM constraint limits operation to SF6.
+- **Frontend-buffer limited, not accumulator-limited.** Accumulator register cost scales with NR only (not M). `SF6` is always supported with the baseline dedicated frontend SRAM path. `SF7` is supported only to the extent that the Frontend Buffer can supply the required delayed samples for the selected storage mode; if the optional CPU SRAM borrow path is unavailable, the intended fallback is `NR=2` acquisition at `SF7`.
 - **Sample width TBD.** int64 accumulators handle both 12-bit and 16-bit inputs. Once sample width is confirmed, the accumulator may be reducible to int32 (12-bit path only).
 
 ---

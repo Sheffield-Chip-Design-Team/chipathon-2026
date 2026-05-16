@@ -88,6 +88,7 @@
 | Test | Pass criterion |
 | --- | --- |
 | Noiseless single-path, SF6 | `Z_j / n_acc` matches `h_j` within rounding |
+| Noiseless single-path, SF7 | `Z_j / n_acc` matches `h_j` within rounding when the selected sample-memory mode is valid |
 | CFO immunity ±10 kHz | Weights correctly phase-aligned to h_j |
 | MRC all branches equal | Equal-magnitude weights, unit-norm sum |
 | EGC noiseless | \|w_j\| = 1, angle(w_j) = −angle(h_j) |
@@ -139,13 +140,21 @@
 
 ### Block 7 — SPI Slave (host interface)
 
-**Pass criterion:** All register R/W operations via RPi SPI0 match expected values. CHIP_ID reads `0xA7`. Extended firmware-load commands write and read back byte-identical CPU SRAM contents. Firmware load and CPU_RESET sequence boots PicoRV32.
+**Pass criterion:** All register R/W operations via RPi SPI0 match expected values. CHIP_ID reads `0xA7`. Extended firmware-load commands write and read back byte-identical CPU SRAM contents in the firmware-visible banks. Firmware load and CPU_RESET sequence boots PicoRV32 without touching the reserved borrow bank.
 
 **Method:**
 - cocotb testbench simulates RPi SPI master; write and read back every defined register
-- Issue extended opcode `0x01` firmware-load writes into CPU SRAM window `0x000`–`0x0FFF`
+- Issue extended opcode `0x01` firmware-load writes into firmware-visible CPU SRAM window only (`BANK0`–`BANK2`)
 - Issue extended opcode `0x02` firmware-readback and compare against written bytes
 - Firmware load sequence: assert `CPU_RESET`, load test binary, de-assert, verify PicoRV32 fetches from `0x00000`
+
+**Additional matrix:**
+
+| Test | Pass criterion |
+| --- | --- |
+| Borrow-bank exclusion | Firmware image and readback never touch reserved `BANK3` / `CPU_SRAM_BORROW_BANK` |
+| Reserved-bank persistence | Preload a sentinel pattern into `BANK3`, release `CPU_RESET`, and confirm the sentinel is unchanged after firmware boot |
+| Per-bank BIST visibility | Host can read `CPU_SRAM_BANK0_PASS..CPU_SRAM_BORROW_BANK_PASS` distinctly |
 
 ---
 
@@ -162,12 +171,20 @@
 
 ### Block 9 — PicoRV32 + Firmware
 
-**Pass criterion:** Firmware computes correct W matrix (verified against Python reference) within one LoRa symbol period of correlator lock. AGC converges within 3 packets on a static channel. Mode auto-switch triggers correctly on NT=2 preamble pair.
+**Pass criterion:** Firmware computes correct W matrix (verified against Python reference) within one LoRa symbol period of correlator lock. AGC converges within 3 packets on a static channel. Mode auto-switch triggers correctly on NT=2 preamble pair. When borrow mode is supported with `CPU_RESET=0`, firmware operates correctly while respecting the reserved upper borrow bank.
 
 **Method:**
 - Write H matrix and N₀ to registers; release CPU_RESET; read back W matrix after IRQ
 - Compare W to Python `W = (H^H @ H + N0*I)^-1 @ H^H`
 - Inject two-node preamble (NT=2); verify ACTIVE_MODE register switches to 1
+
+**Additional matrix:**
+
+| Test | Pass criterion |
+| --- | --- |
+| Linker reservation | `.text/.data/.bss/stack` are placed only in `BANK0`–`BANK2`; map file shows no allocation in reserved `BANK3` |
+| Runtime exclusion | C runtime zero/init path does not clear or write reserved `BANK3` |
+| Shared borrow with CPU live | With `CPU_RESET=0` and `CPU_SRAM_BORROW_EN=1`, AGC still runs and borrowed-bank sentinel data is preserved |
 
 ---
 
@@ -224,6 +241,8 @@ First test with all blocks connected. Run after all block tests pass.
 | Test | Method | Pass criterion |
 | --- | --- | --- |
 | NT=1 MRC, single node, SF7 | Real node → SX1257 ×4 → ASIC RTL → SX1302 → ChirpStack | Packet received and decoded |
+| NT=1 MRC, single node, SF7 with borrow bank enabled | Real node → SX1257 ×4 → ASIC RTL → SX1302 → ChirpStack | Packet received and decoded with `CPU_SRAM_BORROW_BANK_PASS=1` and `CPU_SRAM_BORROW_EN=1` |
+| NT=1 MRC, single node, SF7 borrow bank failed | Force `CPU_SRAM_BORROW_BANK_PASS=0` / inject fault | System downgrades to `NR=2` on branches `1` and `3`; packet still received in degraded mode |
 | NT=1 MRC, sensitivity sweep | Vary node TX power | Sensitivity ≥ standard SX1302 single-antenna (−125 dBm SF7) |
 | NT=1 MRC, gain vs single antenna | Compare PER with 1 vs 4 antennas enabled | ≥ 4 dB improvement at threshold SNR |
 | NT=2 ALMMSE, two nodes, SF7 | Both nodes transmit simultaneously | Both packets received and separated |

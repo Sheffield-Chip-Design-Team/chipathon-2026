@@ -24,6 +24,8 @@ It does **not** own:
 - SC correlation arithmetic
 - training accumulation (register-based, receives live samples independently of SRAM)
 
+Dedicated frontend SRAM is always the primary acquisition buffer. Any use of CPU SRAM is an optional extension to this block, not the baseline architecture.
+
 ---
 
 ## Sample Rate
@@ -117,6 +119,30 @@ Three paths to resolve the depth vs precision tradeoff:
 3. **Reduce to NR=2 in acquisition.** Only store 2 channels (one macro) at full width and use 2-antenna SC detection. Not preferred — loses detection diversity gain.
 
 **This decision is deferred pending ADC precision confirmation. The controller is designed to support either mode via a parameter.**
+
+### Optional CPU SRAM borrow mode
+
+If additional delayed-sample depth is needed without adding more dedicated frontend SRAM macros, the controller may optionally borrow a reserved upper CPU SRAM window:
+
+- `CPU_SRAM_BORROW_EN=0`: baseline implementation, dedicated frontend SRAM only
+- `CPU_SRAM_BORROW_EN=1`: controller extends its logical delayed-sample address space into a hardware-reserved CPU SRAM bank
+
+Rules:
+
+- the borrowed region must be hardware-accessible by the Frontend Buffer Controller without firmware copying
+- the mode is only legal when `CPU_RESET=1`, or when firmware is explicitly barred from the borrowed bank by the memory map
+- when `CPU_RESET=0`, the reserved upper `1 kB` borrow bank must be excluded from the linker map and from C runtime `.bss`/stack initialization so firmware execution does not overwrite borrowed sample data
+- when shared borrow is enabled with `CPU_RESET=0`, the Frontend Buffer Controller has absolute priority on the borrowed bank; Pico stalls on contention and must not disturb frontend timing
+- if the borrow region is unavailable, the controller must not attempt four-branch `SF7` operation that depends on it
+
+Fallback:
+
+- `SF6`: always use the baseline dedicated frontend SRAM path
+- `SF7`: if borrow is unavailable, allow only `NR=2` acquisition fallback using branches `1` and `3`
+
+Open note:
+
+- if branch `1` or `3` is disabled or failed, the exact fallback behavior is intentionally left unspecified for now
 
 ---
 

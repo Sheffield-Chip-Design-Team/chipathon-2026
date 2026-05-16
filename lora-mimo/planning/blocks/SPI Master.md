@@ -11,6 +11,8 @@ Control block. See [System Architecture](../System%20Diagram.md) for context.
 
 SPI master driven by PicoRV32 via AHB-Lite and exposed to the host through the `SX_TARGET` / `SX_ADDR` / `SX_DATA` / `SX_CTRL` pass-through registers. It issues SX1257 single-register transactions for all four radios: frequency, gain, mode, filter, and diagnostic reads. One shared MOSI/MISO/SCK bus is used for all devices; device selection is via a 2-bit address output (`CS_A[1:0]`) driving a board-level 74HC139 2-to-4 decoder that generates the individual active-low SX1257 NSS lines.
 
+In addition to pass-through use by the host or PicoRV32, this block is also used internally by the RX gain-control sequencer to apply queued `RX_GAIN_COMMIT` updates at packet-safe boundaries.
+
 ---
 
 ## Interface
@@ -103,7 +105,7 @@ SX_CTRL.RNW = 1  -> SX1257 WNR = 0   // read
 
 `CS_A[1:0]` is driven from `SX_TARGET[1:0]` (bits [3:2] ignored). `BUSY` is asserted from transaction launch until the final SCK edge and chip-select release. On a read transaction, `SX_DATA` is overwritten with the returned MISO byte when the transaction completes. Firmware and host software must not initiate a new transaction while `BUSY` is high.
 
-See [Register Map](../Register%20Map.md) `0xCA`–`0xCD` for the full protocol and typical init register list.
+See [Register Map](../Register%20Map.md) `0xB5`–`0xB8` for the full protocol and typical init register list.
 
 Programmer-visible sequence:
 
@@ -177,6 +179,8 @@ The SVG shows one SX1257 read transaction after software has already programmed 
 
 **No burst mode required.** Although SX1257 supports burst SPI access with auto-incremented register addresses, this block only needs single-register 2-byte transactions for the current control software path. A future burst extension can be added if startup programming time becomes a concern.
 
+**RX gain apply path.** When `RX_GAIN_COMMIT` is pending, an internal gain-control sequencer takes temporary ownership of this SPI master during `Packet Control FSM IDLE` and issues four writes to `RegRxAnaGain (0x0C)`, one per SX1257. Software-visible `BUSY` behaviour for pass-through transactions is unchanged: host and firmware must still avoid issuing pass-through commands while `BUSY=1`. If the four-write sequence does not complete, the gain-control block leaves `RX_GAIN_ACTIVE_n` unchanged and reports the failure through `RX_GAIN_CTRL.RX_GAIN_ERROR`.
+
 ---
 
 ## Verification
@@ -198,4 +202,3 @@ The SVG shows one SX1257 read transaction after software has already programmed 
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — AHB-Lite master driving this block
 - [AHB-Lite Bus](AHB-Lite%20Bus.md) — interconnect
 - [System Architecture](../System%20Diagram.md) — SPI bus topology and shared signal details
-

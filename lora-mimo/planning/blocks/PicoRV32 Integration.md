@@ -9,7 +9,23 @@ Control block. See [System Architecture](../System%20Diagram.md) for context.
 
 ## Function
 
-PicoRV32 RV32IM soft-core CPU managing all timing-sensitive and algorithmic tasks that are impractical in RTL. Runs firmware loaded over SPI by the RPi host. Connects to all peripherals via a custom `AHB-Lite` wrapper/interconnect.
+PicoRV32 RV32IM soft-core CPU providing optional control-plane and experimental algorithm support. Runs firmware loaded over SPI by the RPi host. Connects to all peripherals via a custom `AHB-Lite` wrapper/interconnect.
+
+Baseline RX packet reception must not depend on this block being operational. If PicoRV32 is held in reset, stalled, or absent from the live control loop, the hardware receive path must still:
+
+- detect packets
+- accumulate training data
+- compute baseline hardware weights
+- control W commit and packet phase
+- drive bypass or combined output to the ΣΔ re-modulator
+
+PicoRV32 is therefore a non-critical enhancement block for:
+
+- software weight algorithms such as ALMMSE
+- cross-packet EMA smoothing
+- AGC policy
+- diagnostics and statistics
+- TDD TX/RX switching orchestration
 
 **Bus decision.** The project bus is now `AHB-Lite`. PicoRV32 is kept as the CPU, so the master side is a custom implementation rather than a native Wishbone integration.
 
@@ -19,17 +35,21 @@ PicoRV32 RV32IM soft-core CPU managing all timing-sensitive and algorithmic task
 
 ## Firmware tasks
 
+These are optional enhancements unless otherwise noted in the TX path. None of the RX-only tasks below may be a single point of failure for baseline reception.
+
 | Task | Trigger | Latency budget |
 | --- | --- | --- |
-| Weight computation (MRC/EGC/SC/Bypass) | `training_done` IRQ (`IRQ_TRAINING_DONE`) | < 2.2 ms at SF6/125 kHz (~70,400 cycles) |
+| Weight computation override (ALMMSE / EMA / custom SW policy) | `training_done` IRQ (`IRQ_TRAINING_DONE`) | < 2.2 ms at SF6/125 kHz (~70,400 cycles) |
 | TX preparation (RX→TX) | `tx_prep` IRQ from TX_CTRL[0] | < 1 ms (LoRaWAN RX1 budget = 1 s) |
 | TX restore (TX→RX) | `tx_done` IRQ from TX_CTRL[1] | < 1 ms |
 | AGC loop | `corr_lock` IRQ (`IRQ_CORR_LOCK`) | < 1 packet |
-| SX1257 init on power-up | Startup | Before first RX |
+| SX1257 init on power-up | Startup when CPU-managed mode is used | Before first RX |
 
-### Weight computation
+### Weight computation override
 
-Triggered by `IRQ_TRAINING_DONE`. Reads Z_j scaled readback registers (`0x70`–`0x8F`), computes combining weights for the active mode, writes W_SHADOW (`0x90`–`0xAF`), then pulses W_COMMIT.
+Triggered by `IRQ_TRAINING_DONE` only when the software path is intentionally being used. In the baseline hardware RX path, PicoRV32 does not need to service this interrupt; hardware weight generation already computes and commits the default MRC weights.
+
+When software override is enabled, firmware reads Z_j scaled readback registers (`0x70`–`0x8F`), computes combining weights for the active mode, writes W_SHADOW (`0x90`–`0xAF`), then pulses W_COMMIT.
 
 Z_j are exposed as int32 (right-shifted by `Z_SHIFT` from register `0xB3`). The common shift preserves relative magnitudes and phases — no division by n_acc needed.
 
@@ -187,7 +207,7 @@ void irq_handler() {
 
             compute_W(H_prev_re, H_prev_im);  // uses active combining mode
             write_W_shadow_registers(W);       // to 0x90-0xAF
-            write_reg(W_CTRL, W_COMMIT);
+            write_reg(WGT_CTRL, 1u << 4);   // pulse W_COMMIT
         }
 
         clear_irq(IRQ_TRAINING_DONE);
@@ -240,7 +260,7 @@ Note: `RxLnaGain` is inverted — a higher register value means less gain (G1=0 
 // Weak/distant nodes may only just trigger correlator lock — any gain reduction
 // at startup risks missing them entirely. Strong-signal saturation is handled
 // by discarding corrupted H estimates rather than reducing starting gain.
-// Host may override via RX_GAIN_n before releasing CPU_RESET.
+// Host may override via RX_GAIN_SHADOW_n + RX_GAIN_COMMIT before releasing CPU_RESET.
 static uint8_t lna_gain[4] = {LNA_G1,  LNA_G1,  LNA_G1,  LNA_G1};
 static uint8_t bb_gain[4]  = {BB_MAX,  BB_MAX,  BB_MAX,  BB_MAX};
 bool ema_reset_pending = false;  // set when any gain changes; consumed by irq_handler
@@ -248,7 +268,8 @@ bool ema_reset_pending = false;  // set when any gain changes; consumed by irq_h
 static void agc_write(int n) {
     uint8_t reg = (lna_gain[n] << 5) | (bb_gain[n] << 1);  // LnaZin=0
     spi_master_write(n, 0x0C, reg);
-    write_reg(RX_GAIN_0 + n, reg);  // mirror to host-readable register
+    write_reg(RX_GAIN_SHADOW_0 + n, reg);
+    write_reg(RX_GAIN_CTRL, 0x01);  // RX_GAIN_COMMIT pulse; safe apply at next idle boundary
 }
 
 void agc_update() {
@@ -282,7 +303,7 @@ void agc_update() {
 }
 ```
 
-**Convergence.** Starting at G1+BB_MAX gives maximum sensitivity for weak first packets. For a saturating close-range node, `AGC_SAT_GUARD` steps the LNA immediately and H is discarded for that packet — the combiner coasts on the previous W (or waits for the first clean packet if no prior W exists). Fine tracking once in the target window converges in 1–2 packets. For a known deployment, pre-set `RX_GAIN_n` via SPI before releasing `CPU_RESET` to skip convergence entirely.
+**Convergence.** Starting at G1+BB_MAX gives maximum sensitivity for weak first packets. For a saturating close-range node, `AGC_SAT_GUARD` steps the LNA immediately and H is discarded for that packet — the combiner coasts on the previous W (or waits for the first clean packet if no prior W exists). Fine tracking once in the target window converges in 1–2 packets. For a known deployment, pre-set `RX_GAIN_SHADOW_n` via SPI and pulse `RX_GAIN_COMMIT` before releasing `CPU_RESET` to skip convergence entirely.
 
 **No-packets limitation.** AGC only runs at correlator lock — between packets, gain is frozen at its current setting. This is intentional: maximum gain during silence maximises the chance of detecting the next transmission. The saturation-discard path handles the first strong packet cleanly without reducing idle sensitivity.
 
@@ -447,7 +468,7 @@ For DMEM faults: adjust stack pointer and linker `.data` / `.bss` placement to a
 - [Training Accumulator](Training%20Accumulator.md) — Z_j source; triggers `IRQ_TRAINING_DONE`
 - [Weight Generation](Weight%20Generation.md) — weight computation detail (HW FSM option)
 - [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — W register target
-- [Register Map Delta - Non-FFT](../Register%20Map%20Delta%20-%20Non-FFT.md) — Z_j registers, training diagnostics
+- [Register Map](../Register%20Map.md) — Z_j registers and training diagnostics
 - [Register Map](../Register%20Map.md) — `CPU_RESET` at `0x02`
 - [Memory Strategy](../Memory%20Strategy.md) — macro selection, BIST architecture, overlay fallback
 - [JTAG TAP](JTAG%20TAP.md) — diagnostic complement: halted-CPU memory readback and single-step

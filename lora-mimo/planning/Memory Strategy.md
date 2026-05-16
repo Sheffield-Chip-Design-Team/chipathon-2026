@@ -14,7 +14,21 @@ Covers all on-chip SRAM in the design: macro selection, voltage domain, BIST, an
 
 **Total on-chip SRAM: 5 KB**
 
-A single unified SRAM holds PicoRV32 `.text`, `.data`, `.bss`, and stack. No separate IMEM/DMEM split — one AHB-Lite port, one BIST instance. Linker places `.text` at `0x00000` and stack at `0x00FFF` (growing downward).
+A single unified SRAM holds PicoRV32 `.text`, `.data`, `.bss`, and stack, but it is partitioned logically into fixed `1 kB` banks for planning:
+
+- `BANK0` `0x0000`–`0x03FF`: firmware-visible
+- `BANK1` `0x0400`–`0x07FF`: firmware-visible
+- `BANK2` `0x0800`–`0x0BFF`: firmware-visible
+- `BANK3` `0x0C00`–`0x0FFF`: reserved `CPU_SRAM_BORROW_BANK`
+
+No separate IMEM/DMEM split — one AHB-Lite port, one BIST instance.
+
+Linker/runtime rule:
+
+- PicoRV32 `.text`, `.data`, `.bss`, and stack must be linked only into `BANK0`–`BANK2`
+- `BANK3` must be excluded from the linker memory map whenever borrow mode is supported
+- C runtime startup must not clear, initialize, or use `BANK3`
+- any allocator, scratch buffer, or stack growth must also remain inside `BANK0`–`BANK2`
 
 **Area:** Frontend Buffer uses 2 × `gf180mcu_fd_ip_sram__sram512x8m8wm1` = **~0.42 mm²** total based on the GF PDK physical dimensions (431.86 µm × 484.88 µm = 209400.2768 µm² each). CPU unified SRAM uses 4 × `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` = **~0.62 mm²** based on the experimental library dimensions currently referenced for the CPU memory plan. Total SRAM area under this mixed-library assumption is **~1.04 mm²**.
 
@@ -75,11 +89,70 @@ The DSP SRAM depth (512 B per macro, 4 bytes per sample time) determines the max
 
 SF8 support costs 2 additional proven macros (total 4 DSP SRAMs, 2 kB). The access pattern, address controller, and BIST architecture are unchanged — only the address counter width and macro count increase.
 
+### Optional CPU SRAM borrow extension
+
+Dedicated frontend SRAM remains the primary acquisition buffer in all modes.
+
+An optional architecture extension may allow the Frontend Buffer Controller to extend its logical depth into a reserved upper CPU SRAM window.
+
+The borrow model is **fixed-bank**, not dynamic:
+
+- CPU SRAM is partitioned into four fixed `1 kB` banks
+- the uppermost `1 kB` bank is reserved as `CPU_SRAM_BORROW_BANK`
+- firmware and linker placement must never use `CPU_SRAM_BORROW_BANK`
+- the frontend buffer may use only that reserved bank; it must not scatter or remap across arbitrary bad locations
+
+If `CPU_RESET=0`, the reserved-bank rule is what preserves borrowed sample data. Releasing the CPU from reset does not erase SRAM, but firmware execution will eventually overwrite any region that remains visible to the linker or C runtime.
+
+- `CPU_SRAM_BORROW_EN=0`: baseline mode; only the dedicated frontend SRAMs are used
+- `CPU_SRAM_BORROW_EN=1`: hardware may spill delayed-sample storage into `CPU_SRAM_BORROW_BANK`
+
+This extension is only valid under strict ownership rules:
+
+- valid when `CPU_RESET=1`, or
+- valid when firmware is explicitly excluded from the borrowed CPU SRAM bank by memory-map partitioning
+
+It is **not** valid for firmware-managed sample copying. If the frontend cannot access the borrowed CPU SRAM as deterministic hardware memory, the feature is disallowed.
+
+### Shared-borrow arbitration rule
+
+If borrow mode is allowed while `CPU_RESET=0`, arbitration is not symmetric:
+
+- the Frontend Buffer Controller has absolute priority on `CPU_SRAM_BORROW_BANK`
+- PicoRV32 must never delay or block a frontend access to the borrowed bank
+- if PicoRV32 would contend for the borrowed bank, Pico stalls; the frontend does not
+- PicoRV32 must not legally access `CPU_SRAM_BORROW_BANK` through normal firmware allocation; linker/runtime exclusion is the primary protection
+- any direct or erroneous Pico access into `CPU_SRAM_BORROW_BANK` is a blocked/illegal access for planning purposes and must not disturb borrowed sample storage
+
+### Borrow-bank integrity rule
+
+The borrowed sample-memory bank must be **fully clean**.
+
+- If `CPU_SRAM_BORROW_BANK` passes BIST with no failing cells, borrow mode may be enabled
+- If `CPU_SRAM_BORROW_BANK` has any failing cells, borrow mode is unavailable
+- No blanking, no overlay CAM, and no partial use of a faulty borrowed bank are allowed
+
+This differs from firmware SRAM recovery. Overlay/relink is acceptable for code/data because software can tolerate sparse remapping. It is **not** acceptable for live circular sample buffering, where deterministic contiguous addressing matters more than salvaging a few bad words.
+
+#### SF7 fallback policy
+
+If the CPU SRAM borrow path is unavailable, unsupported, or `CPU_SRAM_BORROW_BANK` fails BIST, `SF7` must degrade to `NR=2` acquisition rather than attempting a four-branch configuration that exceeds the available trusted sample memory for the selected storage mode. The surviving pair for this fallback is fixed to branches `1` and `3`.
+
+Open note:
+
+- if branch `1` or `3` is disabled or failed, the exact degraded-mode response is still TBD; do not infer an automatic remap in the current spec
+
+The intended priority is:
+
+1. Dedicated frontend SRAM only: baseline `SF6`
+2. Dedicated frontend SRAM + CPU SRAM borrow: optional extended `SF7`
+3. If borrow is not available: allow `SF7` only with `NR=2` on branches `1` and `3`
+
 ---
 
 ## BIST
 
-BIST runs at power-on, before the host releases `CPU_RESET` for the CPU SRAMs and before acquisition mode is entered for the DSP SRAMs. All results are readable via SPI.
+BIST runs at power-on, before the host releases `CPU_RESET` for the CPU SRAM banks and before acquisition mode is entered for the DSP SRAMs. All results are readable via SPI.
 
 ### DSP SRAMs (proven macros) — pass/fail only
 
@@ -99,15 +172,26 @@ Degraded-mode policy:
 | SRAM1 fails | NR=2 using ch0/ch1 (SRAM0) |
 | Both fail | Bypass only; SC acquisition disabled |
 
-### CPU SRAM (unified) — address-level reporting
+### CPU SRAM (banked qualification on unified physical SRAM)
 
-March C- on the unified 4 KB SRAM (1 K × 32-bit words). Reports the first failing word address and the failing bit mask at that address.
+The physical CPU memory is still one unified 4 KB SRAM, but qualification and policy are evaluated per fixed `1 kB` bank:
+
+- `BANK0` firmware-visible
+- `BANK1` firmware-visible
+- `BANK2` firmware-visible
+- `BANK3` reserved `CPU_SRAM_BORROW_BANK`
+
+March C- runs over the full 4 KB array, and the implementation must attribute failures to the corresponding bank so policy can be decided per bank. The reserved upper bank is reported separately so the frontend knows whether borrow mode is legal.
 
 | Register | Width | Description |
 |---|---|---|
 | `SRAM_BIST_PASS` | 1 | 1 = March C- found no faults |
 | `SRAM_BIST_FAIL_ADDR` | 10 | Word address of first failing word (in units of 4 bytes) |
 | `SRAM_BIST_FAIL_BITS` | 32 | Bit mask of failing bits at `SRAM_BIST_FAIL_ADDR` |
+| `CPU_SRAM_BANK0_PASS` | 1 | Lower 1 kB firmware bank clean |
+| `CPU_SRAM_BANK1_PASS` | 1 | Second 1 kB firmware bank clean |
+| `CPU_SRAM_BANK2_PASS` | 1 | Third 1 kB firmware bank clean |
+| `CPU_SRAM_BORROW_BANK_PASS` | 1 | Reserved upper 1 kB borrow bank clean and therefore eligible for live sample buffering |
 
 **March C- timing at 32 MHz:** 1 K words × 11 passes × ~4 cycles/word ≈ 44 K cycles ≈ 1.4 ms. Negligible at boot.
 
@@ -118,7 +202,7 @@ Power-on
   ↓
 DSP SRAM BIST (SRAM0, SRAM1 — parallel or sequential)
   ↓
-CPU SRAM BIST (unified 4 KB — CPU held in reset)
+CPU SRAM BIST (full 4 KB array, results reported per 1 kB bank — CPU held in reset)
   ↓
 All BIST_PASS registers valid and readable via SPI
   ↓
@@ -126,6 +210,11 @@ Host reads results, programs overlay if needed (see below)
   ↓
 Host releases CPU_RESET → PicoRV32 boots
 ```
+
+Borrow enable rule:
+
+- `CPU_SRAM_BORROW_EN` may assert only if `CPU_SRAM_BORROW_BANK_PASS=1`
+- if `CPU_SRAM_BORROW_BANK_PASS=0`, borrow mode is disabled regardless of the status of the lower firmware banks
 
 ---
 
@@ -152,9 +241,11 @@ If the CPU SRAM is completely unusable (BIST shows pervasive faults, overlay exh
 
 ---
 
-## Fallback strategy — bad-word overlay
+## Fallback strategy — bad-word overlay for firmware banks only
 
 Writing a correct value to a stuck SRAM cell does not fix it: the cell overrides the write driver and the bad data reappears on every subsequent read. The overlay approach bypasses the macro read entirely for known-bad addresses.
+
+This recovery mechanism applies only to firmware-visible CPU SRAM banks. It does **not** apply to `CPU_SRAM_BORROW_BANK` when that bank is used as live sample memory.
 
 ### Architecture
 
@@ -192,7 +283,14 @@ The CAM lookup adds at most 1 pipeline stage (combinational priority encoder). A
 | > 16 bad words or large contiguous fault | Overlay exhausted; normal firmware execution impossible; JTAG program buffer remains available for chip diagnostics and register inspection |
 | `SRAM_BIST_PASS = 1` | Normal boot; no overlay needed |
 
-The probability of a fault in the 4-byte reset vector is low for a random stuck-bit distribution across 32 KB (probability ~0.006%). A contiguous large fault block is more characteristic of a process defect than a random bitcell failure and is not recoverable by any software means.
+Borrow-bank rule:
+
+| Borrow bank status | Outcome |
+|---|---|
+| `CPU_SRAM_BORROW_BANK_PASS = 1` | Borrow mode may be enabled |
+| `CPU_SRAM_BORROW_BANK_PASS = 0` | Borrow mode forbidden; `SF7` falls back to `NR=2` on branches `1` and `3` |
+
+Because the CPU SRAM macros are experimental, the design must not rely on low defect probability assumptions for any specific address range, including the reset vector or the reserved borrow bank. Reset-vector faults, clustered failures, and bank-local defects must all be treated as normal planning cases. Any bad reset vector remains unrecoverable for normal boot, and any faulty borrow bank remains ineligible for live sample buffering.
 
 ### JTAG as a diagnostic complement
 

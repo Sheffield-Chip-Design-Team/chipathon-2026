@@ -9,7 +9,7 @@ RX path control block (non-FFT frontend). See [Non-FFT LoRa Frontend Proposal](.
 
 ## Role
 
-Owns packet phase and no-glitch switching between bypass and combined output. Converts SC timing events and weight-readiness signals into deterministic control for the frontend buffer, weight generation, and combiner.
+Owns packet phase and no-glitch switching between bypass and combined output. Converts SC timing events and weight-readiness signals into deterministic control for the frontend buffer, weight generation, combiner, and optional PSRAM replay path.
 
 Compared to the FFT-path FSM, this version is significantly simplified:
 
@@ -18,6 +18,13 @@ Compared to the FFT-path FSM, this version is significantly simplified:
 - Critical path is: `sc_lock → training_done → W_commit → safe_switch`
 
 The FSM must never backpressure `iq_valid`. If weight computation misses the current packet, the live stream stays in bypass — this is expected next-packet behaviour, not an error.
+
+If the optional PSRAM same-packet path is enabled, the FSM also decides whether the current packet should:
+
+- stay on the baseline live/bypass flow
+- start PSRAM buffering at `sc_lock`
+- switch the combiner input to PSRAM replay at payload entry
+- drain buffered packet tail after `packet_end`
 
 ---
 
@@ -40,7 +47,7 @@ IDLE ──────────────► PREAMBLE_ACQ
 | `IDLE` | Reset; packet end; timeout | `safe_switch=1`; promote `W_SHADOW→W_ACTIVE` if `W_commit_pending`; unfreeze FRONTEND_BUF; assert `noise_sample_en` each symbol period while `energy_j < NOISE_THRESH` and `!sc_lock` | `sc_lock` |
 | `PREAMBLE_ACQ` | `sc_lock` | Latch `timing_ref`, `ACTIVE_MODE`, `ACTIVE_ANTENNA_EN`; freeze FRONTEND_BUF; combiner=bypass; raise `IRQ_CORR_LOCK` | `training_done` or preamble timeout |
 | `W_PENDING` | `training_done` | Raise `IRQ_TRAINING_DONE`; weight gen computes and writes `W_SHADOW`; combiner stays bypass | `W_commit` or payload-start timeout |
-| `PAYLOAD_ACTIVE` | Payload phase begins | Combiner = `W_ACTIVE` if `W_valid`, else bypass; set `W_MISSED_PACKET` if W was not committed before this state | `packet_end` or timeout |
+| `PAYLOAD_ACTIVE` | Payload phase begins | Combiner = `W_ACTIVE` if `W_valid`, else bypass; if `PSRAM_EN=1` and replay was armed on time, combiner input switches to PSRAM replay; else live path remains active; set `W_MISSED_PACKET` if W was not committed before this state | `packet_end` or timeout |
 
 ### Packet end detection
 
@@ -81,6 +88,7 @@ If `W_commit` fires before this point and the receiver is between packets, `W_va
 
 - `W_ACTIVE` is updated from `W_SHADOW`
 - `ACTIVE_MODE` and `ACTIVE_ANTENNA_EN` are updated from their shadow registers
+- queued `RX_GAIN_COMMIT` requests may be applied to the SX1257s
 - FRONTEND_BUF is unfrozen
 
 Mid-packet changes to mode or antenna mask are accepted into shadow registers but do not take effect until the next IDLE entry.
@@ -127,6 +135,21 @@ The buffer is frozen from sc_lock until packet end so that the 2-symbol acquisit
 
 `W_valid` is set once after the first successful W_commit and cleared only if the host explicitly resets it or changes mode. It persists across packets so that an older (but still valid) W is used rather than falling back to bypass every time weight computation is slightly late.
 
+### Optional PSRAM same-packet replay
+
+When `PSRAM_EN=1`, the FSM commands the [PSRAM Buffer Controller](PSRAM%20Buffer%20Controller.md) as follows:
+
+| FSM event | PSRAM action |
+|---|---|
+| `IDLE -> PREAMBLE_ACQ` | Assert `psram_packet_arm`; begin buffering at `sc_lock` |
+| Compute `payload_start_estimate` | Load `payload_rd_base = payload_start_estimate - sc_lock_time` |
+| `W_commit` before payload entry | Assert `psram_replay_start`; combiner input selects replay stream in `PAYLOAD_ACTIVE` |
+| `W_commit` after payload entry | Do not start replay; keep live path for this packet and queue W for next packet |
+| `packet_end` while replay active | Allow PSRAM controller `DRAIN` phase, then return to live path in `IDLE` |
+| Timeout / abort | Assert `psram_abort`; fall back to baseline next-packet behaviour |
+
+The replay path is optional and default-off. With `PSRAM_EN=0`, all outputs above remain inactive and the FSM behaviour is identical to the baseline next-packet design.
+
 ---
 
 ## Interface
@@ -144,11 +167,17 @@ The buffer is frozen from sc_lock until packet end so that the 2-symbol acquisit
 | `W_commit` | in | 1 | Weight gen finished writing W_SHADOW |
 | `mode_shadow` | in | 2 | Host/firmware requested combining mode |
 | `antenna_en_shadow` | in | 4 | Host/firmware requested antenna mask |
+| `psram_en` | in | 1 | Optional same-packet PSRAM replay enable |
+| `psram_replay_active` | in | 1 | PSRAM controller is currently feeding replay samples to combiner |
 | `pkt_timeout_syms` | in | 8 | Max packet length in symbols (register-configurable) |
 | `safe_switch` | out | 1 | Receiver idle; W/mode/antenna active banks may update |
 | `W_valid_set` | out | 1 | Strobe: commit W_SHADOW → W_ACTIVE |
 | `W_missed_packet` | out | 1 | Sticky: W not ready before payload; cleared on next sc_lock |
 | `combiner_source` | out | 1 | 0=bypass, 1=W_ACTIVE |
+| `psram_packet_arm` | out | 1 | Start per-packet PSRAM buffering at `sc_lock` |
+| `psram_replay_start` | out | 1 | Start PSRAM replay from `payload_rd_base` |
+| `psram_abort` | out | 1 | Cancel replay for current packet and fall back to live path |
+| `payload_rd_base` | out | 24 | Byte offset into the current PSRAM packet buffer for replay start |
 | `buf_freeze` | out | 1 | FRONTEND_BUF freeze control |
 | `packet_phase` | out | 3 | Encoded FSM state for status/debug |
 | `packet_active` | out | 1 | Packet FSM not in IDLE |
@@ -210,6 +239,9 @@ See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the EMA block spec
 | Normal lock and train | Inject sc_lock → training_done → W_commit in sequence | FSM traverses all states; W_valid_set asserts in IDLE; combiner uses W_ACTIVE on next packet |
 | W on time | W_commit before payload start | W_MISSED_PACKET=0; W_ACTIVE valid for current packet if between packets |
 | W late (next-packet) | W_commit during PAYLOAD_ACTIVE | W_MISSED_PACKET=1; combiner stays bypass this packet; W_ACTIVE updated at IDLE |
+| PSRAM replay on time | `PSRAM_EN=1`, `W_commit` before payload start | `psram_replay_start` asserts once; combiner input switches to replay in `PAYLOAD_ACTIVE` |
+| PSRAM disabled | `PSRAM_EN=0` for full packet | `psram_packet_arm/replay_start` never assert; behaviour matches baseline next-packet path |
+| PSRAM late replay | `PSRAM_EN=1`, `W_commit` after payload entry | Replay never starts; packet stays live/bypass; W queued for next packet |
 | Training timeout | training_done never asserts | Preamble timeout fires; FSM enters PAYLOAD_ACTIVE in bypass; W_MISSED_PACKET=1 |
 | Packet timeout | New sc_lock never arrives | PKT_TIMEOUT_SYMS expires; FSM returns to IDLE |
 | Back-to-back packets | Two sc_locks in rapid succession | First sc_lock ends current packet (IDLE); second sc_lock immediately enters PREAMBLE_ACQ |
@@ -228,5 +260,6 @@ See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the EMA block spec
 - [Training Accumulator](Training%20Accumulator.md) — provides `training_done`
 - [Weight Generation](Weight%20Generation.md) — provides `W_commit`
 - [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — receives `buf_freeze`
+- [PSRAM Buffer Controller](PSRAM%20Buffer%20Controller.md) — optional same-packet replay path
 - [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — receives `combiner_source`, `active_mode`, `active_antenna_en`
 - [Register Map](../Register%20Map.md) — `PKT_TIMEOUT_SYMS`, `PACKET_PHASE`, `W_MISSED_PACKET`, IRQ registers

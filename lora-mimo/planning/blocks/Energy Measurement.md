@@ -77,4 +77,4 @@ So the architectural role is:
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — provides int8 input
 - [Correlator Bank](Correlator%20Bank.md) — owns the main acquisition path and should host this logic
 - [AGC](AGC.md) — consumes the lock-latched per-antenna energy values
-- [Register Map](../Register%20Map.md) — `ENERGY[0..3]` at `0x50`–`0x57`
+- [Register Map](../Register%20Map.md) — `ENERGY[0..3]` at `0x40`–`0x47`

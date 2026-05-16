@@ -4,6 +4,13 @@ Per-antenna automatic gain control for the four SX1257 receive chains.
 
 The AGC loop is implemented in the ASIC firmware on PicoRV32. It adjusts each SX1257's `RegRxAnaGain` independently based on energy measured at packet lock.
 
+If PicoRV32 is not operational, AGC is simply absent rather than blocking RX. The supported fallback is fixed gain:
+
+- `RX_GAIN_ACTIVE_0..3` remain at their reset values, or
+- the host pre-programs `RX_GAIN_SHADOW_0..3` and commits them before leaving the chip in RX-only mode
+
+This means AGC is an optimisation and robustness feature, not a correctness dependency for baseline reception.
+
 ---
 
 ## Why AGC lives in the ASIC
@@ -20,7 +27,8 @@ Reasons:
 The result is:
 
 - SX1302 remains the downstream LoRa demodulator
-- PicoRV32 owns RX gain control for `SX1257_0..3`
+- PicoRV32 owns RX gain policy for `SX1257_0..3` when CPU-managed mode is active
+- without PicoRV32, gain remains fixed at the programmed fallback setting
 
 ---
 
@@ -33,8 +41,9 @@ Sequence:
 1. Energy detector latches per-antenna energy over the last 8 symbols
 2. `CORR_LOCK` IRQ fires
 3. PicoRV32 reads the energy snapshot
-4. PicoRV32 updates `RegRxAnaGain` for each antenna if needed
-5. New gain applies to the next packet
+4. PicoRV32 updates `RX_GAIN_SHADOW_n` for each antenna if needed
+5. PicoRV32 pulses `RX_GAIN_COMMIT`
+6. New gain applies at the next packet-safe boundary
 
 Important constraints:
 
@@ -65,14 +74,22 @@ Notes:
 - LNA steps are non-uniform: 6 dB for `G1..G3`, 12 dB for `G3..G6`
 - usable total range is about 70 dB; nominal register range is 78 dB
 
-Host-visible mirrors:
+Host-visible control and state:
 
-- `RX_GAIN_0` at `0x30`
-- `RX_GAIN_1` at `0x31`
-- `RX_GAIN_2` at `0x32`
-- `RX_GAIN_3` at `0x33`
+- `RX_GAIN_SHADOW_0..3` at `0x20`–`0x23`
+- `RX_GAIN_ACTIVE_0..3` at `0x26`–`0x29`
+- `RX_GAIN_CTRL` at `0x2A`
 
-These mirror PicoRV32 writes and may also be preset by the host before releasing `CPU_RESET`.
+These registers implement the same shadow/active model used elsewhere in the design:
+
+- writers modify `RX_GAIN_SHADOW_n`
+- `RX_GAIN_COMMIT` requests promotion
+- the request applies to all four branches together
+- the Packet Control FSM `safe_switch` window is the only legal apply point
+- a gain-control sequencer drives the SX1257 SPI writes during that safe window
+- `RX_GAIN_ACTIVE_n` shows the live state currently in force
+- `RX_GAIN_PENDING` stays set until the off-chip writes complete
+- `RX_GAIN_ERROR` indicates the previous apply sequence did not complete, in which case the old live gain remains in force
 
 ---
 
@@ -162,8 +179,8 @@ for each antenna n:
         leave gain unchanged
 
     if gain changed:
-        write SX1257 RegRxAnaGain
-        mirror RX_GAIN_n register
+        write RX_GAIN_SHADOW_n
+        pulse RX_GAIN_COMMIT   // requests atomic apply of the full gain bank at next safe_switch
         set ema_reset_pending
 ```
 
@@ -197,6 +214,29 @@ This prevents averaging channel estimates measured under incompatible gain state
 ---
 
 ## Known limitations
+
+### Shadow/active ownership
+
+Ownership is a hard architectural rule, not a convention:
+
+- `CPU_RESET=1`: `RX_GAIN_OWNER=0`, so host/manual logic owns `RX_GAIN_SHADOW_n` and `RX_GAIN_COMMIT`
+- `CPU_RESET=0`: `RX_GAIN_OWNER=1`, so PicoRV32 AGC owns `RX_GAIN_SHADOW_n` and `RX_GAIN_COMMIT`
+
+`RX_GAIN_OWNER` is therefore a direct reflection of whether the CPU is held in reset. There is no mixed-writer mode in the current architecture.
+
+If host override is needed while PicoRV32 would otherwise be active, the host must first assert `CPU_RESET=1`, then rewrite `RX_GAIN_SHADOW_n`, and then pulse `RX_GAIN_COMMIT`.
+
+### Apply completion semantics
+
+`RX_GAIN_COMMIT` does not write the SX1257 immediately. It only queues a bank update.
+
+Completion rules:
+
+1. shadow values are sampled as one bank when `RX_GAIN_COMMIT` is pulsed
+2. the bank is applied only during `Packet Control FSM IDLE`
+3. all four branch writes must complete before `RX_GAIN_ACTIVE_n` is updated
+4. on success: `RX_GAIN_PENDING` clears and the new bank becomes live for the next packet
+5. on failure: `RX_GAIN_PENDING` remains set, `RX_GAIN_ERROR` asserts, and the previous active bank stays live
 
 ### No between-packet probing
 

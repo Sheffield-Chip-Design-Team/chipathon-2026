@@ -74,7 +74,7 @@ graph LR
             EM["Energy Measurement\nper-antenna energy snapshot\nAGC / diagnostics"]
             TACC["Training Accumulator\nbranch cross-correlation\nZ_j · training_done"]
             PCFSM["Packet Control FSM\npacket phase · safe_switch\nbuf_freeze · W gating"]
-            FBUF["Frontend Buffer Controller\n1 kB rolling SRAM\n8-bit saturated · SF7 max"]
+            FBUF["Frontend Buffer Controller\n1 kB rolling SRAM primary\noptional CPU-SRAM borrow\n8-bit saturated · SF7 policy"]
         end
 
         subgraph combining["Weight Generation & MRC Combining"]
@@ -230,6 +230,30 @@ RPi: de-assert cpu_reset=0
 PicoRV32: fetch from 0x00000, begin execution
 ```
 
+### CPU-held-reset RX-only mode
+
+RX-only operation is supported with `CPU_RESET=1` permanently asserted.
+
+This is the baseline hardware fallback mode when PicoRV32 firmware is absent, stalled, or intentionally disabled. In this mode:
+
+- the RX datapath still runs using the hardware-only chain
+- packet detection, training accumulation, hardware weight generation, packet FSM control, combining, and ΣΔ re-modulation remain active
+- AGC does not run; the four SX1257 gain registers stay at their programmed or reset values
+- TX/TDD sequencing is not supported
+
+Required reset defaults for this mode are:
+
+| Item | Reset / default value | Reason |
+| --- | --- | --- |
+| `CPU_RESET` | `1` | CPU held in reset unless explicitly released |
+| `MIMO_CTRL.MODE` | `0` (MRC) | Hardware combining path selected by default |
+| `MIMO_CTRL.ANTENNA_EN` | `0xF0` | All four RX antennas enabled |
+| Weight generation control | `AUTO`, `AUTO_COMMIT=1`, `MODE=MRC` | Hardware weight path selected with no firmware commit required |
+| `PSRAM_EN` | `0` | Same-packet replay disabled by default |
+| `RX_GAIN_SHADOW_0..3` / `RX_GAIN_ACTIVE_0..3` | `0x3E` each | Fixed maximum-gain fallback if AGC is inactive |
+
+Host software may still pre-program SX1257 registers and gain mirrors over SPI before enabling RX-only operation, but firmware execution is not required once those defaults are acceptable.
+
 ### TX signal chain
 
 ```
@@ -249,6 +273,8 @@ The ASIC is not in the TX data path. Its role is TDD switching and RX protection
 9. System returns to 4-antenna RX; W recomputed on next sc_lock
 
 LoRaWAN RX1 budget = 1,000,000 µs; total switching overhead ~280 µs — margin >3,500×.
+
+This TX path is outside the CPU-less fallback mode above. If PicoRV32 is held in reset, the supported operating mode is RX-only.
 
 > **REMOD output during TX window.** During steps 5–6, the combiner continues running on antennas 3+4 and REMOD_A is still driven to SX1302 Radio A — which is simultaneously transmitting. The SX1302 datasheet does not explicitly state whether the digital input is ignored during TX; this must be verified against the SX1302 HAL and register map before tapeout. If the SX1302 does not cleanly ignore REMOD_A during TX, the ASIC will need to gate REMOD_A (force to midscale or zero) for the duration of the TX window. No RTL provision for this exists yet — add a `remod_gate` signal driven by `TX_ACTIVE` if required.
 
@@ -327,6 +353,8 @@ The following boundaries require explicit CDC treatment:
 | **Total** | | **~1.60 mm²** |
 
 > FFT Engine (~10 K GE) and Baseband SRAM (544 KB, ~4.50 mm²) are removed in the non-FFT architecture. CPU memory is a single unified 4 KB SRAM (text + data + stack). The current memory plan uses GF-provided `gf180mcu_fd_ip_sram__sram512x8m8wm1` macros for the frontend buffer and `gf180mcu_ocd_ip_sram` experimental macros for the 4 KB CPU SRAM estimate. GE estimates for new blocks are preliminary.
+>
+> Dedicated frontend SRAM remains the primary acquisition buffer. An optional architecture extension may allow the Frontend Buffer Controller to borrow a reserved upper CPU SRAM window (`CPU_SRAM_BORROW_EN`) to extend delayed-sample depth for `SF7`, but only when `CPU_RESET=1` or when firmware is explicitly excluded from that borrowed bank. In the shared case, the reserved upper `1 kB` bank must be removed from the linker/runtime-visible PicoRV32 memory map so `.text`, `.data`, `.bss`, and stack never touch it. If the borrow path is unavailable, `SF7` must fall back to `NR=2` acquisition on branches `1` and `3` rather than relying on four-branch sample storage that is not guaranteed.
 
 ---
 
@@ -361,7 +389,7 @@ See [Work Allocation Summary](Work%20Allocation.md) for a more detailed assignme
 | SPI Slave (host interface) | TBD | [SPI Slave](blocks/SPI%20Slave.md) |
 | SPI Master (→ SX1257) | TBD | [SPI Master](blocks/SPI%20Master.md) |
 | AHB-Lite Bus | TBD | — |
-| Register Bank (generated) | TBD | [Register Map](Register%20Map.md) · [Register Map Delta](Register%20Map%20Delta%20-%20Non-FFT.md) |
+| Register Bank (generated) | TBD | [Register Map](Register%20Map.md) |
 | IRQ Controller | TBD | [IRQ Controller](blocks/IRQ%20Controller.md) |
 | JTAG TAP | TBD | — |
 | PicoRV32 firmware + algorithms | TBD | [MIMO Algorithms](MIMO%20Algorithms.md) |

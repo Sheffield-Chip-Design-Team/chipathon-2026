@@ -1,8 +1,8 @@
 # Frontend Calibration — RF Loopback Procedure
 
-Derives and programs the `cal_j` coefficients (`CAL_0..3` registers at `0xC0`–`0xD3`) that correct per-branch gain and phase mismatch in the Weight Generation block.
+Derives and programs the `cal_j` coefficients (`CAL_0..3` registers at `0xA0`–`0xAF`) that correct per-branch gain and phase mismatch in the Weight Generation block.
 
-**Related:** [Weight Generation](blocks/Weight%20Generation.md) · [Register Map Delta](Register%20Map%20Delta%20-%20Non-FFT.md) · [Test Plan — AFE characterisation](Test%20Plan.md) · [System Architecture](System%20Architecture.md)
+**Related:** [Weight Generation](blocks/Weight%20Generation.md) · [Register Map](Register%20Map.md) · [Test Plan — AFE characterisation](Test%20Plan.md) · [System Architecture](System%20Architecture.md)
 
 ---
 
@@ -119,22 +119,22 @@ Write the default values to all `CAL` registers so no prior calibration affects 
 
 | Register | Address | Value |
 |---|---|---|
-| `CAL_0_I_HI` | `0xC0` | `0x7F` |
-| `CAL_0_I_LO` | `0xC1` | `0xFF` |
-| `CAL_0_Q_HI` | `0xC2` | `0x00` |
-| `CAL_0_Q_LO` | `0xC3` | `0x00` |
-| `CAL_1_I_HI` | `0xC4` | `0x7F` |
-| `CAL_1_I_LO` | `0xC5` | `0xFF` |
-| `CAL_1_Q_HI` | `0xC6` | `0x00` |
-| `CAL_1_Q_LO` | `0xC7` | `0x00` |
-| `CAL_2_I_HI` | `0xC8` | `0x7F` |
-| `CAL_2_I_LO` | `0xC9` | `0xFF` |
-| `CAL_2_Q_HI` | `0xCE` | `0x00` |
-| `CAL_2_Q_LO` | `0xCF` | `0x00` |
-| `CAL_3_I_HI` | `0xD0` | `0x7F` |
-| `CAL_3_I_LO` | `0xD1` | `0xFF` |
-| `CAL_3_Q_HI` | `0xD2` | `0x00` |
-| `CAL_3_Q_LO` | `0xD3` | `0x00` |
+| `CAL_0_I_HI` | `0xA0` | `0x7F` |
+| `CAL_0_I_LO` | `0xA1` | `0xFF` |
+| `CAL_0_Q_HI` | `0xA2` | `0x00` |
+| `CAL_0_Q_LO` | `0xA3` | `0x00` |
+| `CAL_1_I_HI` | `0xA4` | `0x7F` |
+| `CAL_1_I_LO` | `0xA5` | `0xFF` |
+| `CAL_1_Q_HI` | `0xA6` | `0x00` |
+| `CAL_1_Q_LO` | `0xA7` | `0x00` |
+| `CAL_2_I_HI` | `0xA8` | `0x7F` |
+| `CAL_2_I_LO` | `0xA9` | `0xFF` |
+| `CAL_2_Q_HI` | `0xAA` | `0x00` |
+| `CAL_2_Q_LO` | `0xAB` | `0x00` |
+| `CAL_3_I_HI` | `0xAC` | `0x7F` |
+| `CAL_3_I_LO` | `0xAD` | `0xFF` |
+| `CAL_3_Q_HI` | `0xAE` | `0x00` |
+| `CAL_3_Q_LO` | `0xAF` | `0x00` |
 
 ### Step 2 — Enable calibration signal path
 
@@ -154,9 +154,9 @@ Write the default values to all `CAL` registers so no prior calibration affects 
 ### Step 3 — Capture Z_j
 
 1. Set `WGT_SRC = SW` (bit 0 of `WGT_CTRL` = 1) so the hardware FSM does not auto-commit and overwrite the measurement.
-2. Set `MIMO_CTRL` to single-node mode (`NT=1`) and enable all four branches (`ANTENNA_EN = 0xF`).
+2. Set `MIMO_CTRL.MODE=0` (MRC mode) and enable all four branches (`ANTENNA_EN = 0xF`).
 3. Arm the SC detector and wait for `IRQ_TRAINING_DONE`. The Training Accumulator produces `Z_j` by correlating each branch against the upchirp reference.
-4. Read `Z_j` from registers `0x70`–`0x8F` (see [Register Map Delta](Register%20Map%20Delta%20-%20Non-FFT.md) for byte layout). Each `Z_j` is a complex int32 pair: I[31:0] at byte offsets 0–3, Q[31:0] at byte offsets 4–7, for branch j = 0..3.
+4. Read `Z_j` from registers `0x70`–`0x8F` (see [Register Map](Register%20Map.md) for byte layout). Each `Z_j` is a complex int32 pair: I[31:0] at byte offsets 0–3, Q[31:0] at byte offsets 4–7, for branch j = 0..3.
 5. Record `Z_j` for all four branches.
 
 Repeat steps 3–5 three times and average in the complex domain to reduce noise:
@@ -204,10 +204,10 @@ cal_q15 = [(to_q15(c.real), to_q15(c.imag)) for c in cal]
 
 ```python
 reg_map = [
-    (0xC0, 0xC1, 0xC2, 0xC3),   # branch 0: I_HI, I_LO, Q_HI, Q_LO
-    (0xC4, 0xC5, 0xC6, 0xC7),   # branch 1
-    (0xC8, 0xC9, 0xCE, 0xCF),   # branch 2  (gap at 0xCA–0xCD — do not write)
-    (0xD0, 0xD1, 0xD2, 0xD3),   # branch 3
+    (0xA0, 0xA1, 0xA2, 0xA3),   # branch 0: I_HI, I_LO, Q_HI, Q_LO
+    (0xA4, 0xA5, 0xA6, 0xA7),   # branch 1
+    (0xA8, 0xA9, 0xAA, 0xAB),   # branch 2
+    (0xAC, 0xAD, 0xAE, 0xAF),   # branch 3
 ]
 
 for j, (I_HI, I_LO, Q_HI, Q_LO) in enumerate(reg_map):

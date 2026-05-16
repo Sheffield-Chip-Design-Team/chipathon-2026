@@ -2,6 +2,37 @@
 
 The digital signal processing chain is receive-only. The ASIC sits between four SX1257 RF front-ends and an SX1302 LoRa baseband processor, performing multi-antenna combining before passing re-modulated bitstreams to the SX1302 for LoRa demodulation.
 
+## Architectural requirement
+
+Baseline RX operation must not require PicoRV32 firmware execution.
+
+The mandatory hardware-only receive path is:
+
+- decimation
+- DC removal
+- SC detection and timing
+- training accumulation
+- hardware weight generation
+- packet-phase control
+- combiner or bypass selection
+- ΣΔ re-modulation
+
+PicoRV32 is therefore treated as:
+
+- optional for baseline RX correctness
+- useful for ALMMSE, EMA smoothing, diagnostics, AGC policy, and TDD control
+- allowed to fail or remain in reset without preventing packet reception in the baseline MRC/bypass modes
+
+If firmware-dependent features are enabled, they must fail back to the hardware baseline rather than blocking the live receive stream.
+
+The supported firmware-free fallback is specifically `RX-only`:
+
+- `CPU_RESET=1`
+- hardware weight path enabled
+- PSRAM replay disabled
+- fixed SX1257 gain from reset defaults or host-programmed register values
+- no TX/TDD sequencing
+
 Two operating modes share the same hardware:
 
 | Mode | Config | Combining | Output |
@@ -85,6 +116,8 @@ See [DC Removal](blocks/DC%20Removal.md).
 Manages the shared 1 kB dual-SRAM rolling history. Provides the current and M-sample-delayed raw samples needed by the SC Preamble Detector for adjacent-symbol autocorrelation. Frozen on `sc_lock` to preserve the acquisition history.
 
 At SF7 with 8-bit storage using D=M read-before-write: 1-symbol (128-sample) rolling delay per branch fits exactly in 2×512B macros. SF8 requires 4 macros; SF9 requires 8.
+
+The dedicated frontend SRAM remains the primary acquisition buffer. An optional extension may let hardware borrow a reserved upper CPU SRAM window (`CPU_SRAM_BORROW_EN=1`) to extend buffer depth, but only when `CPU_RESET=1` or when firmware is explicitly excluded from that bank. If the borrow path is not available, `SF7` falls back to `NR=2` acquisition on branches `1` and `3` rather than four-branch operation that depends on unavailable sample memory.
 
 See [Frontend Buffer Controller](blocks/Frontend%20Buffer%20Controller.md).
 
@@ -175,6 +208,8 @@ With `WGT_AUTO_COMMIT=1`, the hardware path commits weights within ~50 cycles of
 
 PicoRV32 is triggered by `IRQ_TRAINING_DONE`, reads `Z_j` from registers (or `W_HW` for EMA), computes any weight formula, writes `W_SHADOW`, and pulses `W_COMMIT`.
 
+This software path is optional. Baseline RX must still work when PicoRV32 does not service the interrupt.
+
 `W_HW` read-only registers expose the hardware-computed result to firmware at all times, enabling EMA smoothing without re-deriving the raw per-packet estimate.
 
 See [Weight Generation](blocks/Weight%20Generation.md).
@@ -255,7 +290,7 @@ Disable EMA (`ALPHA_SHIFT=0`) for mobile deployments where channel coherence tim
 
 ### 4. Initial Gain Setting
 
-Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitivity. The AGC loop converges within 1–3 packets via the `IRQ_CORR_LOCK` path. For a known deployment, pre-set `RX_GAIN_n` via SPI before releasing `CPU_RESET`.
+Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitivity. The AGC loop converges within 1–3 packets via the `IRQ_CORR_LOCK` path. For a known deployment, pre-set `RX_GAIN_SHADOW_n` via SPI and pulse `RX_GAIN_COMMIT` before releasing `CPU_RESET`.
 
 ---
 

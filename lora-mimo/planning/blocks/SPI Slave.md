@@ -60,7 +60,7 @@ Rules:
 - Every normal register transaction is exactly 2 bytes under one `HOST_CS` assertion.
 - If Byte 0 is anything other than `0x7F`, the slave interprets the transaction as a normal 2-byte register access.
 - Address value `0x7F` is reserved as an extended-command escape and must not be assigned to a normal register.
-- The active register set for tapeout is the non-FFT map in [Register Map Delta - Non-FFT](../Register%20Map%20Delta%20-%20Non-FFT.md).
+- The active register set for tapeout is the register map in [Register Map](../Register%20Map.md).
 
 ### Extended command escape
 
@@ -222,7 +222,6 @@ sequenceDiagram
 
 ## Related blocks
 
-- [Register Map Delta - Non-FFT](../Register%20Map%20Delta%20-%20Non-FFT.md) — active register set for tapeout
-- [Register Map](../Register%20Map.md) — legacy base map; superseded where the non-FFT delta differs
+- [Register Map](../Register%20Map.md) — authoritative active register set for tapeout
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — unified 4 kB CPU SRAM target for firmware load; `CPU_RESET` register
 - [AHB-Lite Bus](AHB-Lite%20Bus.md) — internal bus for register access

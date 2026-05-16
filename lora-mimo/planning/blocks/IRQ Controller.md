@@ -48,7 +48,7 @@ Collects interrupt sources from DSP blocks and routes them to PicoRV32 (internal
 
 ## Register (AHB-Lite and SPI mirror, read/clear)
 
-Mirrors `IRQ_STATUS` (`0x49`) and `IRQ_CLEAR` (`0x4A`) in the register map.
+Mirrors `IRQ_STATUS` (`0x32`) and `IRQ_CLEAR` (`0x33`) in the register map.
 
 | Bit | Source | Clear |
 | --- | --- | --- |
@@ -62,7 +62,7 @@ Mirrors `IRQ_STATUS` (`0x49`) and `IRQ_CLEAR` (`0x4A`) in the register map.
 
 `irq_out` = OR of all uncleared sources. `IRQ` pad mirrors `irq_out`.
 
-The SPI-facing register map exposes the same bit layout at `IRQ_STATUS` (`0x49`) and `IRQ_CLEAR` (`0x4A`). Firmware and host software should treat the IRQ wire as a doorbell: read `IRQ_STATUS` to identify the source, service the corresponding block/registers, then write 1s to `IRQ_CLEAR` for serviced bits.
+The SPI-facing register map exposes the same bit layout at `IRQ_STATUS` (`0x32`) and `IRQ_CLEAR` (`0x33`). Firmware and host software should treat the IRQ wire as a doorbell: read `IRQ_STATUS` to identify the source, service the corresponding block/registers, then write 1s to `IRQ_CLEAR` for serviced bits.
 
 ---
 
@@ -72,7 +72,7 @@ The SPI-facing register map exposes the same bit layout at `IRQ_STATUS` (`0x49`)
 
 **Clock domain.** All current interrupt sources (`corr_lock`, `training_done`, `W_missed_packet`, `tx_prep`, `tx_done`) are generated inside the 32 MHz domain — no CDC required. If any future source comes from outside the 32 MHz domain (e.g. a SX1257 DIO pin), it must pass through a 2-FF synchroniser before entering the sticky-bit latch. Do not add unsynchronised external signals directly to the IRQ OR tree.
 
-**RPi IRQ.** `irq_out` drives the `TCK_IRQ` pad as a level-high output when `JTAG_EN=0` (normal mode). RPi GPIO should be configured for rising-edge interrupt. RPi firmware reads `IRQ_STATUS` (`0x49`) to determine source, then writes `IRQ_CLEAR` (`0x4A`). When `JTAG_EN=1` (debug mode) the pad is disconnected from `irq_out` and taken over by the JTAG TAP as TCK input — the RPi must poll `IRQ_STATUS` via SPI during debug sessions instead of relying on the pad interrupt.
+**RPi IRQ.** `irq_out` drives the `TCK_IRQ` pad as a level-high output when `JTAG_EN=0` (normal mode). RPi GPIO should be configured for rising-edge interrupt. RPi firmware reads `IRQ_STATUS` (`0x32`) to determine source, then writes `IRQ_CLEAR` (`0x33`). When `JTAG_EN=1` (debug mode) the pad is disconnected from `irq_out` and taken over by the JTAG TAP as TCK input — the RPi must poll `IRQ_STATUS` via SPI during debug sessions instead of relying on the pad interrupt.
 
 ---
 

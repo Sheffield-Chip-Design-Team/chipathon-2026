@@ -9,7 +9,7 @@ RX path stage 8. See [DSP Flow](../DSP%20Flow.md) for context.
 
 ## Function
 
-Time-domain, sample-by-sample combining of 4 antenna inputs using weight vector W computed by PicoRV32 firmware. Supports two modes:
+Time-domain, sample-by-sample combining of 4 antenna inputs using weight vector W computed by the Weight Generation block. PicoRV32 may optionally override the shadow bank in software mode, but the combiner must not depend on firmware for baseline RX. Supports two modes:
 
 **MRC:** inner product — scalar output
 ```
@@ -50,7 +50,7 @@ W is produced by the Weight Generation block (hardware FSM or PicoRV32 software 
 
 | Parameter | Value | Notes |
 | --- | --- | --- |
-| W precision | int16 Q1.15 | Written by PicoRV32 firmware |
+| W precision | int16 Q1.15 | Written by hardware weight generation or PicoRV32 software override |
 | x precision | 12–16 bit signed (TBD) | From decimators; matches decimator output width |
 | Accumulator | int32 | int16 × int16 × 4 MACs = 32-bit minimum; truncate to int16 after accumulation (verify headroom once input width is decided) |
 | MACs per sample | 4 complex = 8 real MACs | |
@@ -74,7 +74,7 @@ MODE=1 passthrough: y = sign_extend(x[bypass_sel])
 
 This makes the first packet recoverable as a single-antenna packet if W arrives late, and prevents mid-preamble silence from breaking SX1302 detection.
 
-**W register read timing.** W registers must be double-buffered. PicoRV32 writes `W_SHADOW` via AHB-Lite, then asserts a one-cycle commit strobe after all words are written. Hardware copies `W_SHADOW` to `W_ACTIVE` atomically and sets `W_valid`. The combiner reads only `W_ACTIVE`, so firmware writes cannot glitch live MACs. If W is invalidated mid-packet, keep using the last committed `W_ACTIVE` until firmware explicitly clears `W_valid` or changes mode.
+**W register read timing.** W registers must be double-buffered. The hardware weight path or PicoRV32 software path writes `W_SHADOW`, then asserts a one-cycle commit strobe after all words are written. Hardware copies `W_SHADOW` to `W_ACTIVE` atomically and sets `W_valid`. The combiner reads only `W_ACTIVE`, so firmware writes cannot glitch live MACs. If W is invalidated mid-packet, keep using the last committed `W_ACTIVE` until firmware explicitly clears `W_valid` or changes mode.
 
 **No-glitch switching.** `W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` must update only when the receiver is idle between packets. Host writes to `MODE` or `ANTENNA_EN` update shadow configuration during an active packet and commit at the next idle boundary. If current-packet W is not ready, stay in bypass for that packet rather than switching mid-symbol or at a payload boundary.
 
@@ -105,7 +105,7 @@ This makes the first packet recoverable as a single-antenna packet if W arrives 
 ## Related blocks
 
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — full-precision input (12–16 bit TBD)
-- [PicoRV32 Integration](PicoRV32%20Integration.md) — writes W via AHB-Lite
+- [PicoRV32 Integration](PicoRV32%20Integration.md) — optional software override path via AHB-Lite
 - [ΣΔ Re-modulator](ΣΔ%20Re-modulator.md) — consumes int16 output
 - [Register Map](../Register%20Map.md) — `W` matrix at `0x90`–`0xAF`
 - [DSP Flow](../DSP%20Flow.md)

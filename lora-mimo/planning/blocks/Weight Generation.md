@@ -18,6 +18,16 @@ Two parallel paths produce weights:
 
 A single register bit (`WGT_SRC`) selects which path commits to `W_ACTIVE`. Firmware can inspect the hardware-computed result at any time via read-only `W_HW` registers, regardless of which path is active.
 
+### Reset-default policy
+
+For CPU-less RX-only operation, the reset defaults for this block must select a complete hardware path:
+
+- `WGT_SRC = AUTO`
+- `WGT_AUTO_COMMIT = 1`
+- `WGT_MODE = MRC`
+
+With those defaults, `training_done` is sufficient to produce committed `W_ACTIVE` weights without any firmware servicing.
+
 ---
 
 ## Combining modes
@@ -59,13 +69,25 @@ Training Accumulator
                   W_ACTIVE  ──►  Combiner MAC
 ```
 
-### Register control bits (`WGT_CTRL` register)
+### Register control bits (`WGT_CTRL`, address `0x35`)
 
 | Bit(s) | Field | Values | Description |
 |---|---|---|---|
 | 0 | `WGT_SRC` | 0=AUTO, 1=SW | Selects which path writes W_SHADOW and commits. AUTO: hardware FSM. SW: PicoRV32. |
 | 1 | `WGT_AUTO_COMMIT` | 0/1 | When `WGT_SRC=AUTO`: 1 = hardware commits W_HW → W_ACTIVE immediately on completion (same-packet). 0 = hardware writes W_HW but waits for firmware W_COMMIT pulse. |
 | 3:2 | `WGT_MODE` | 00=bypass, 01=SC, 10=EGC, 11=MRC | Combining formula used by the hardware path. Ignored when `WGT_SRC=SW`. |
+| 4 | `W_COMMIT` | write-1 pulse | Shared commit request into the Packet Control FSM after W_SHADOW has been fully written. |
+| 5 | `W_VALID` | read-only | Active W bank is valid. |
+| 6 | `W_PENDING` | read-only | A commit has been requested but not yet activated at `safe_switch`. |
+| 7 | `W_MISSED_PACKET` | read-only | Commit arrived too late for the current packet payload window. |
+
+Recommended reset value for `WGT_CTRL`: `0b00001110`
+
+- `WGT_SRC=0` (`AUTO`)
+- `WGT_AUTO_COMMIT=1`
+- `WGT_MODE=11` (`MRC`)
+
+In other words, `0x35` is not only a mode register. It is the authoritative software-visible handshake point between Weight Generation and the Packet Control FSM.
 
 ### W_HW registers
 

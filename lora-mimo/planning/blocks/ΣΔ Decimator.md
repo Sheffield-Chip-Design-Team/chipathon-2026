@@ -151,7 +151,7 @@ Normalisation right-shift: `shift = N·log₂(R) − (W_out − 1)`.
 
 ## Related blocks
 
-- [Register Map](../Register%20Map.md) — `DECIM_CFG` at `0x1B`
+- [Register Map](../Register%20Map.md) — `DECIM_CFG` at `0x12`
 - [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — receives full-precision output; performs 8-bit saturation for SRAM storage
 - [Training Accumulator](Training%20Accumulator.md) — receives full-precision output directly (not from SRAM)
 - [Energy Measurement](Energy%20Measurement.md) — receives full-precision output; clock-gated by `iq_valid`
