@@ -1,0 +1,1812 @@
+<!DOCTYPE html>
+<html xml:lang="en" lang="en" dir="ltr" class="no-js">
+<head>
+
+    <!-- OneTrust Cookies Consent Notice start for digilent.com -->
+    <script src="https://cdn.cookielaw.org/scripttemplates/otSDKStub.js"  type="text/javascript" charset="UTF-8" data-domain-script="6a456c81-3504-49b7-b1fc-8674d90ab87b" ></script>
+    <script type="text/javascript">
+    function OptanonWrapper() { }
+    </script>
+    <!-- OneTrust Cookies Consent Notice end for digilent.com --> 
+
+
+    <!-- <script src="https://unpkg.com/vue"></script> -->
+    <script src="https://digilent.com/reference/lib/tpl/digilent-tpl/js/vue.min.js" type="text/javascript"></script>
+
+    <meta charset="UTF-8" />
+    <meta name="referrer" content="always" />
+
+    <!--[if IE]><meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" /><![endif]-->
+    <title>
+        Arty A7 Reference Manual - Digilent Reference    </title>
+    
+    <script src="https://use.typekit.net/axp2oni.js"></script>
+    <script>try{Typekit.load({ async: false });}catch(e){}</script>
+    
+    <script>(function(H){H.className=H.className.replace(/\bno-js\b/,'js')})(document.documentElement)</script>
+
+<!-- NOTE: dokuwiki's php css compressor doesn't play nice with media queries -->
+<link href="https://digilent.com/reference/lib/tpl/digilent-tpl/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://digilent.com/reference/lib/tpl/digilent-tpl/css/print.css" rel="stylesheet" media="print">
+<script src="https://digilent.com/reference/lib/tpl/digilent-tpl/js/iconic.min.js" type="text/javascript" ></script>
+<script src="https://digilent.com/reference/lib/tpl/digilent-tpl/js/respond.min.js" type="text/javascript"></script>
+
+<meta name="generator" content="DokuWiki"/>
+<meta name="robots" content="index,follow"/>
+<meta name="keywords" content="rm,doc,arty-a7"/>
+<meta name="description" content="Arty A7 Reference Manual  Note  The Arty A7-35T variant is no longer in production and is now retired.  The Arty A7, formerly known as the Arty, is a ready-to-use development platform designed around the Artix-7™ Field Programmable Gate Array (FPGA) from Xilinx. It was designed specifically for use as a MicroBlaze Soft Processing System. When used in this context, the Arty A7 becomes the most flexible processing platform you could hope to add to your collection, capable of adapting to whatever y…"/>
+<meta name="author" content="Arthur Brown"/>
+<link rel="search" type="application/opensearchdescription+xml" href="https://digilent.com/reference/lib/exe/opensearch.php" title="Digilent Reference"/>
+<link rel="start" href="https://digilent.com/reference/"/>
+<link rel="contents" href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual?do=index" title="Sitemap"/>
+<link rel="manifest" href="https://digilent.com/reference/lib/exe/manifest.php"/>
+<link rel="alternate" type="application/rss+xml" title="Recent Changes" href="https://digilent.com/reference/feed.php"/>
+<link rel="alternate" type="application/rss+xml" title="Current namespace" href="https://digilent.com/reference/feed.php?mode=list&amp;ns=programmable-logic:arty-a7"/>
+<link rel="alternate" type="text/html" title="Plain HTML" href="https://digilent.com/reference/_export/xhtml/programmable-logic/arty-a7/reference-manual"/>
+<link rel="alternate" type="text/plain" title="Wiki Markup" href="https://digilent.com/reference/_export/raw/programmable-logic/arty-a7/reference-manual"/>
+<link rel="canonical" href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual"/>
+<link rel="stylesheet" href="https://digilent.com/reference/lib/exe/css.php?t=digilent-tpl&amp;tseed=76a25c757d51c427bc86f330efa4555b"/>
+<!--[if gte IE 9]><!-->
+<script >/*<![CDATA[*/var NS='programmable-logic:arty-a7';var JSINFO = {"plugins":{"dropfiles":{"insertFileLink":0},"edittable":{"default columnwidth":""},"vshare":{"youtube":"youtube\\.com\/.*[&?]v=([a-z0-9_\\-]+)","vimeo":"vimeo\\.com\\\/(\\d+)","slideshare":"slideshare.*id=(\\d+)","dailymotion":"dailymotion\\.com\/video\/([a-z0-9]+)","archiveorg":"archive\\.org\/(?:embed|details)\/([a-zA-Z0-9_\\-]+)","soundcloud":"soundcloud\\.com\/([\\w-]+\/[\\w-]+)","niconico":"nicovideo\\.jp\/watch\/(sm[0-9]+)","bitchute":"bitchute\\.com\\\/video\\\/([a-zA-Z0-9_\\-]+)","coub":"coub\\.com\\\/view\\\/([a-zA-Z0-9_\\-]+)","odysee":"odysee\\.com\/\\$\/(?:embed|download)\/([-%_?=\/a-zA-Z0-9]+)","youku":"v\\.youku\\.com\/v_show\/id_([0-9A-Za-z=]+)\\.html","bilibili":"bilibili\\.com\\\/video\\\/(BV[0-9A-Za-z]+)","msoffice":"(?:office\\.com.*[&?]videoid=([a-z0-9\\-]+))","msstream":"microsoftstream\\.com\\\/video\\\/([a-f0-9\\-]{36})"}},"move_renameokay":false,"plugin":{"semantic":{"exposeWebService":1}},"id":"programmable-logic:arty-a7:reference-manual","namespace":"programmable-logic:arty-a7","ACT":"show","useHeadingNavigation":1,"useHeadingContent":1};
+/*!]]>*/</script>
+<script src="https://digilent.com/reference/lib/exe/jquery.php?tseed=34a552433bc33cc9c3bc32527289a0b2" defer="defer"></script>
+<script src="https://digilent.com/reference/lib/exe/js.php?t=digilent-tpl&amp;tseed=76a25c757d51c427bc86f330efa4555b" defer="defer"></script>
+<script type="text/x-mathjax-config">/*<![CDATA[*/MathJax.Hub.Config({
+
+    tex2jax: {
+
+        inlineMath: [ ["$","$"], ["\\(","\\)"] ],
+
+        displayMath: [ ["$$","$$"], ["\\[","\\]"] ],
+
+        processEscapes: true
+
+    }
+
+});
+/*!]]>*/</script>
+<script type="text/javascript" charset="utf-8" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.9/MathJax.js?config=TeX-AMS_CHTML.js"></script>
+<script type="application/ld+json">/*<![CDATA[*/{
+    "@context": "http:\/\/schema.org",
+    "@type": "WebSite",
+    "url": "https:\/\/digilent.com\/reference\/",
+    "name": "Digilent Reference",
+    "potentialAction": {
+        "@type": "SearchAction",
+        "target": "https:\/\/digilent.com\/reference\/doku.php?do=search&amp;id={search_term_string}",
+        "query-input": "required name=search_term_string"
+    }
+}
+/*!]]>*/</script>
+<script type="application/ld+json">/*<![CDATA[*/[
+    {
+        "@context": "http:\/\/schema.org",
+        "@type": "Article",
+        "headline": "Arty A7 Reference Manual",
+        "name": "Arty A7 Reference Manual",
+        "datePublished": "2018-05-15T19:14:08+00:00",
+        "dateCreated": "2018-05-15T19:14:08+00:00",
+        "dateModified": "2025-06-27T07:30:36+00:00",
+        "description": "Arty A7 Reference Manual  Note  The Arty A7-35T variant is no longer in production and is now retired.  The Arty A7, formerly known as the Arty, is a ready-to-use development platform designed around the Artix-7\u2122 Field Programmable Gate Array (FPGA) from Xilinx. It was designed specifically for use as a MicroBlaze Soft Processing System. When used in this context, the Arty A7 becomes the most flexible processing platform you could hope to add to your collection, capable of adapting to whatever y\u2026",
+        "license": "https:\/\/creativecommons.org\/licenses\/by-nc-sa\/4.0\/deed.en",
+        "url": "https:\/\/digilent.com\/reference\/programmable-logic\/arty-a7\/reference-manual",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/digilent.com\/reference\/programmable-logic\/arty-a7\/reference-manual"
+        },
+        "publisher": {
+            "@type": "Organization",
+            "name": "Digilent Reference",
+            "logo": {
+                "@type": "ImageObject",
+                "url": "https:\/\/digilent.com\/reference\/ilent.com\/reference\/lib\/tpl\/digilent-tpl\/images\/logo.png"
+            }
+        },
+        "image": {
+            "@type": "ImageObject",
+            "url": "https:\/\/digilent.com\/reference\/_media\/reference\/programmable-logic\/arty-a7\/arty-a7-callout.png",
+            "width": 1000,
+            "height": 867
+        },
+        "author": {
+            "@context": "http:\/\/schema.org",
+            "@type": "Person",
+            "name": "Arthur Brown",
+            "email": null
+        },
+        "contributor": [
+            {
+                "@context": "http:\/\/schema.org",
+                "@type": "Person",
+                "name": "Arthur Brown",
+                "email": null
+            },
+            {
+                "@context": "http:\/\/schema.org",
+                "@type": "Person",
+                "name": "Martha",
+                "email": null
+            },
+            {
+                "@context": "http:\/\/schema.org",
+                "@type": "Person",
+                "name": "Ana-Maria-Eliza Balas",
+                "email": null
+            },
+            {
+                "@context": "http:\/\/schema.org",
+                "@type": "Person",
+                "name": "Jeffrey",
+                "email": null
+            },
+            {
+                "@context": "http:\/\/schema.org",
+                "@type": "Person",
+                "name": "James Colvin",
+                "email": null
+            },
+            {
+                "@context": "http:\/\/schema.org",
+                "@type": "Person",
+                "name": "Ioan",
+                "email": null
+            }
+        ]
+    },
+    {
+        "@context": "http:\/\/schema.org",
+        "@type": "WebPage",
+        "relatedLink": [
+            "https:\/\/digilent.com\/reference\/programmable-logic\/arty-a7\/start"
+        ]
+    }
+]
+/*!]]>*/</script>
+<!--<![endif]-->
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="shortcut icon" href="https://digilent.com/reference/_media/favicon.ico" />
+<link rel="apple-touch-icon" href="https://digilent.com/reference/lib/tpl/digilent-tpl/images/apple-touch-icon.png" />
+    <style>
+        .navbar-brand-img {
+            box-sizing: content-box;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            height: auto;\n        }
+    </style>
+
+<!--BEGIN QUALTRICS WEBSITE FEEDBACK SNIPPET-->
+<script type='text/javascript'>
+(function(){var g=function(e,h,f,g){
+this.get=function(a){for(var a=a+"=",c=document.cookie.split(";"),b=0,e=c.length;b<e;b++){for(var d=c[b];" "==d.charAt(0);)d=d.substring(1,d.length);if(0==d.indexOf(a))return d.substring(a.length,d.length)}return null};
+this.set=function(a,c){var b="",b=new Date;b.setTime(b.getTime()+6048E5);b="; expires="+b.toGMTString();document.cookie=a+"="+c+b+"; path=/; "};
+this.check=function(){var a=this.get(f);if(a)a=a.split(":");else if(100!=e)"v"==h&&(e=Math.random()>=e/100?0:100),a=[h,e,0],this.set(f,a.join(":"));else return!0;var c=a[1];if(100==c)return!0;switch(a[0]){case "v":return!1;case "r":return c=a[2]%Math.floor(100/c),a[2]++,this.set(f,a.join(":")),!c}return!0};
+this.go=function(){if(this.check()){var a=document.createElement("script");a.type="text/javascript";a.src=g;document.body&&document.body.appendChild(a)}};
+this.start=function(){var t=this;"complete"!==document.readyState?window.addEventListener?window.addEventListener("load",function(){t.go()},!1):window.attachEvent&&window.attachEvent("onload",function(){t.go()}):t.go()};};
+try{(new g(100,"r","QSI_S_ZN_9mGrPMbiRHWifVc","https://zn9mgrpmbirhwifvc-singuser98edbb5b.siteintercept.qualtrics.com/SIE/?Q_ZID=ZN_9mGrPMbiRHWifVc")).start()}catch(i){}})();
+</script>
+<div id='ZN_9mGrPMbiRHWifVc'><!--DO NOT REMOVE-CONTENTS PLACED HERE--></div>
+<!--END WEBSITE FEEDBACK SNIPPET-->
+
+<!-- Font Awesome -->
+<script src="https://kit.fontawesome.com/553b1116bb.js" crossorigin="anonymous"></script>
+
+<!-- Google Tag Manager -->
+<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-NHG3J9R');</script>
+<!-- End Google Tag Manager -->
+
+<script src="https://digilent.s3.us-west-2.amazonaws.com/resources/cdn/sitewide-banner/src/sitewide-banner.js"></script>
+<link href="https://digilent.s3.us-west-2.amazonaws.com/resources/cdn/sitewide-banner/src/sitewide-banner.css" rel="stylesheet">
+
+</head>
+
+<body data-spy="scroll" data-target="#dw_toc">
+	<!-- Google Tag Manager (noscript) -->
+	<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-NHG3J9R"
+	height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+	<!-- End Google Tag Manager (noscript) -->
+
+        <!--[if IE 6 ]><div id="IE6"><![endif]--><!--[if IE 7 ]><div id="IE7"><![endif]--><!--[if IE 8 ]><div id="IE8"><![endif]-->
+
+                <div id="dokuwiki__site" >
+	
+	<div id="dokuwiki__top" class="dokuwiki site mode_show ">
+        
+		<!-------------------------------------Start  OF HEADER------------------------------------->	
+	<div class="navbar navbar-default navbar-fixed-top" id="navbar">
+            <div>
+                <ul id="header-tabs">
+                    <li>
+                        <a href="https://digilent.com">Shop</a>
+                    </li>
+                    <li id="wiki-tab">
+                        <a href="https://digilent.com/reference">Reference</a>
+                    </li>
+                </ul>
+                <div id="ni-tag"><img src="/reference/_media/2024-digilent-emersontagline-247x24.png" alt="digilent"></div>
+            </div>
+
+
+            <div class="container">
+                                <div id="header-main">
+                    
+                    <div class="flex-container">
+                        <button class="navbar-toggle" data-toggle="collapse" data-target="#topnav" type="button">
+                            <span class="sr-only">Toggle Navigation</span>
+                            <span class="icon-bar"></span>
+                            <span class="icon-bar"></span>
+                            <span class="icon-bar"></span>
+                        </button>
+
+                        <!---------------Search--------------->
+                        <form action="https://digilent.com/reference/start" accept-charset="utf-8" class="navbar-form" id="dw__search" method="get" role="search"><input type="hidden" name="do" value="search" /><i id="search-icon" class="fa fa-search"></i><div class="form-group"><input type="text"  autocomplete="off" id="qsearch__in" accesskey="f" name="id" class="form-control col-lg-3" title="[F]" placeholder="Search" /> </div><div id="qsearch__out" class="ajax_qsearch"></div></form>                        
+                        <!---------------Logo ---------------> 
+                                                    <div id="logo"><a class="navbar-brand-img" href="/reference"><img src="/reference/_media/2024-Digilent-ReferenceHeader-310x64.png" alt=""></a></div>
+                                                
+                        <!---------------Tools ---------------> 
+                        <ul class="nav navbar-nav">
+                            <li class="dropdown">
+                                <a href="#" class="dropdown-toggle toolsdrop" data-toggle="dropdown">
+                                <i id="tools-icon" class="fas fa-tools"></i><span id="tools-text">
+                                Internal Tools</span><b class="caret"></b></a>
+                                <ul id="tools-menu" class="dropdown-menu hortop">
+                                    <li class="dropdown-header">Page Tools</li>
+                                    <li><a href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual?do=edit"  class="action source" accesskey="v" rel="nofollow" title="Show pagesource [V]">Show pagesource</a></li><li><a href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual?do=revisions"  class="action revs" accesskey="o" rel="nofollow" title="Old revisions [O]">Old revisions</a></li><li><a href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual?do=backlink"  class="action backlink" rel="nofollow" title="Backlinks">Backlinks</a></li>                                    <li class="dropdown-header">Site Tools</li>
+                                                                        <li><a href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual?do=recent"  class="action recent" accesskey="r" rel="nofollow" title="Recent Changes [R]">Recent Changes</a></li><li><a href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual?do=index"  class="action index" accesskey="x" rel="nofollow" title="Sitemap [X]">Sitemap</a></li><li><a href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual?do=media&amp;ns=programmable-logic%3Aarty-a7"  class="action media" rel="nofollow" title="Media Manager">Media Manager</a></li><li><a href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual?do=admin"  class="action admin" rel="nofollow" title="Admin">Admin</a></li>                                                                                                            <li class="dropdown-header">User Tools</li>
+                                    <li><a href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual?do=login&amp;sectok="  class="action login" rel="nofollow" title="Log In">Log In</a></li>                                                                    </ul>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="header-categories">
+                <div class="container">
+                    <div class="container navbar-collapse collapse" id="topnav">				
+                        <!---------------Generate Navbar--------------->					
+                            
+                            <!------------------------------------------------------------------------------------------				
+                            - START WIKI NAV
+                            ---------------------------------------------	--------------------------------------------->
+                            <div>
+	<ul class="nav navbar-nav flex-container">
+		<li class="dropdown dropdown-lg">
+			<a href="#" class="dropdown-toggle" data-toggle="dropdown">Boards and Components<b class="caret"></b></a>
+			<ul class="dropdown-menu dropdown-menu-lg row two-col hortop">
+				<li class ="col-sm-7">
+					<ul>
+						<li class="dropdown-header">FPGA/SoC Development Boards</li>
+						<li><a href="/reference/programmable-logic/arty-a7/start">Arty A7</a></li>
+						<li><a href="/reference/programmable-logic/arty-s7/start">Arty S7</a></li>
+						<li><a href="/reference/programmable-logic/arty-z7/start">Arty Z7</a></li>
+						<li><a href="/reference/programmable-logic/basys-3/start">Basys 3</a></li>
+						<li><a href="/reference/programmable-logic/cmod-a7/start">Cmod A7</a></li>
+						<li><a href="/reference/programmable-logic/cmod-s7/start">Cmod S7</a></li>
+						<li><a href="/reference/programmable-logic/cora-z7/start">Cora Z7</a></li>
+						<li><a href="/reference/programmable-logic/eclypse-z7/start">Eclypse Z7</a></li>
+						<li><a href="/reference/programmable-logic/genesys-2/start">Genesys 2</a></li>
+						<li><a href="/reference/programmable-logic/genesys-zu/start">Genesys ZU</a></li>
+						<li><a href="/reference/programmable-logic/nexys-a7/start">Nexys A7</a></li>
+						<li><a href="/reference/programmable-logic/nexys-video/start">Nexys Video</a></li>
+						<li><a href="/reference/programmable-logic/usb104a7/start">USB104 A7</a></li>
+						<li><a href="/reference/programmable-logic/zedboard/start">Zedboard Zynq-7000 Development Board</a></li>
+						<li><a href="/reference/programmable-logic/zybo-z7/start">Zybo Z7</a></li>						
+						<li><a class="see-all" href="/reference/programmable-logic/start">See All</a></li>
+						<li class="divider"></li>
+					</ul>
+
+					<ul>
+						<li class="dropdown-header">Programmers</li>
+						<li><a class="see-all" href="/reference/programmers/start">See All</a></li>
+					</ul>
+				</li>
+
+				<li class ="col-sm-5">
+					<ul>
+						<li class="dropdown-header">Expansion Modules</li>
+						<ul>
+							<li class="dropdown-header sub-heading">Zmods</li>
+							<li><a href="/reference/zmod/zmoddac/start">Zmod AWG</a></li>
+							<li><a href="/reference/zmod/digitizer/start">Zmod Digitizer</a></li>
+							<li><a href="/reference/zmod/zmodadc/start">Zmod Scope</a></li>							
+							<li><a href="/reference/zmod/sdr/start">Zmod SDR</a></li>							
+							<li><a class="see-all" href="/reference/zmod/start">See All</a></li>
+							<li class="divider"></li>
+						</ul>
+
+						<ul>
+							<li class="dropdown-header sub-heading">Pmods</li>
+							<li><a class="see-all" href="/reference/pmod/start">See All</a></li>
+							<li class="divider"></li>
+						</ul>
+		
+						<ul>
+							<li class="dropdown-header sub-heading">Pcams</li>
+							<li><a href="/reference/add-ons/fmc-pcam-adapter/start">FMC Pcam Adapter</a></li>
+							<li><a href="/reference/add-ons/pcam-5c/start">Pcam 5C</a></li>
+							<li class="divider"></li>
+						</ul>
+
+						<ul>
+							<li class="dropdown-header">MCU Boards</li>
+							<li><a href="/reference/microprocessor/basys-mx3/start">Basys MX3</a></li>
+							<li><a href="/reference/microprocessor/max32/start">Max32</a></li>
+							<li><a href="/reference/microprocessor/uc32/start">uC32</a></li>
+							<li><a href="/reference/microprocessor/wf32/start">WF32</a></li>
+							<li><a href="/reference/microprocessor/wi-fire/start">Wi-Fire</a></li>
+							<li><a class="see-all" href="/reference/microprocessor/start">See All</a></li>
+						</ul>
+					</ul>
+				</li>
+			</ul>
+		</li>
+
+		<li class="dropdown dropdown-lg">
+			<a href="#" class="dropdown-toggle" data-toggle="dropdown">Test and Measurement Equipment<b class="caret"></b></a>
+			<ul class="dropdown-menu dropdown-menu-lg row two-col hortop">
+				<li class ="col-sm-7">
+					<ul>
+						<li class="dropdown-header">USB Scopes, Analyzers and Signal Generators</li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-3/start">Analog Discovery 3</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-2/start">Analog Discovery 2</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-studio-max/start">Analog Discovery Studio Max</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-studio/start">Analog Discovery Studio</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-pro-2000-series/start">Analog Discovery Pro 2000 Series</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-pro-3x50/start">Analog Discovery Pro 3000 Series</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-pro-5000-series/start">Analog Discovery Pro 5000 Series</a></li>
+						<li><a href="/reference/test-and-measurement/digital-discovery/start">Digital Discovery</a></li>
+						<li><a href="/reference/test-and-measurement/discovery-power-supply-3340/start">Discovery Power Supply (DPS3340)</a></li>
+						<li><a class="see-all" href="/reference/test-and-measurement/start">See All</a></li>
+						<li class="divider"></li>
+					</ul>
+
+					<ul>
+						<li class="dropdown-header ">Software</li>
+						<li><a href="/reference/software/waveforms/waveforms-3/start">WaveForms</a></li>						
+						<li class="divider"></li>
+					</ul>
+				</li>
+				<li class="col-sm-5">
+					
+					<ul>
+						<li class="dropdown-header">Adapters and Canvases</li>
+						<li><a href="/reference/add-ons/audio-adapter-plus/start">Audio Adapter+</a></li>
+						<li><a href="/reference/test-and-measurement/bnc-adapter-board/start">BNC Adapter</a></li>
+						<li><a href="/reference/test-and-measurement/current-and-power-adapter/start">Current and Power Adapter</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-2-breadboard-breakout/start">Breadboard Breakout</a></li>
+						<li><a href="/reference/test-and-measurement/bb-adapter-board/start">Breadboard Adapter</a></li>
+						<li><a href="/reference/add-ons/impedance-analyzer/start">Impedance Analyzer Adapter</a></li>
+						<li><a href="/reference/test-and-measurement/transistor-tester-adapter/start">Transistor Tester Adapter</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-studio-max/canvases/start">ADS Max Canvases</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-studio/canvases/start">ADS Canvases</a></li>
+						<!-- <li><a href="/reference/test-and-measurement/analog-discovery-studio/canvases/blank-canvas/start">Blank Canvas</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-studio/canvases/breadboard-canvas/start">Breadboard Canvas</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-studio/canvases/digital-trainer-canvas/start">Digital Trainer Canvas</a></li>
+						<li><a href="/reference/test-and-measurement/analog-discovery-studio/canvases/interposer-canvas/start">Interposer Canvas</a></li> -->
+					</ul>
+				 </li>
+				</li>
+			</ul>
+		</li>
+
+		<li class="dropdown dropdown-lg">
+			<a href="#" class="dropdown-toggle" data-toggle="dropdown">DAQ and Datalogging<b class="caret"></b></a>
+			<ul class="dropdown-menu dropdown-menu-lg row two-col hortop">
+				<li class="col-sm-12">
+					<ul>
+						<li class="dropdown-header">MCCDAQ Documentation</li>
+						<li><a href="/reference/daq-and-datalogging/manuals/start">Manuals</a></li>
+						<li><a href="/reference/daq-and-datalogging/specifications/start">Specifications</a></li>
+						<li><a href="/reference/daq-and-datalogging/documents/start">App Notes and Tech Tips</a></li>
+						<li><a class="see-all" href="/reference/daq-and-datalogging/start">See All</a></li>
+					</ul>
+					<ul>
+						<li class="dropdown-header">DAQ and Data Loggers</li>
+						<li><a href="/reference/daq-and-datalogging/webdaq/webdaq-316/start">WebDAQ 316</a></li>
+						<li><a href="/reference/daq-and-datalogging/webdaq/webdaq-504/start">WebDAQ 504</a></li>
+						<li><a href="/reference/daq-and-datalogging/webdaq/webdaq-904/start">WebDAQ 904</a></li>						
+					</ul>
+				</li>
+			</ul>
+		</li>
+
+
+
+		<li class="dropdown dropdown-lg">
+			<a href="#" class="dropdown-toggle" data-toggle="dropdown">Software<b class="caret"></b></a>
+			<ul class="dropdown-menu dropdown-menu-lg row two-col hortop">
+				<li class="col-sm-12">
+					<ul>
+						<li class="dropdown-header">Digilent Software</li>
+						<li><a href="/reference/software/adept/start">Adept 2</a></li>
+						<li><a href="/reference/software/waveforms/waveforms-3/start">WaveForms</a></li>
+						<li><a href="/reference/software/waveforms/waveforms-sdk/start">WaveForms SDK</a></li>
+						<li><a href="/reference/software/labview/start">LabVIEW WaveForms Toolkit</a></li>
+						<li><a class="see-all"href="/reference/software/start">See All</a></li>
+						<li class="divider"></li>
+					</ul>
+					<ul>
+						<li class="dropdown-header">MCC Software</li>
+						<li><a href="/reference/software/dasylab/start">DASYLab</a></li>	
+						<li><a href="/reference/software/daqami/start">DAQami</a></li>			
+						<li><a href="/reference/software/instacal/start">InstaCal</a></li>		
+						<li><a href="/reference/software/matlab/start">MATLAB</a></li>		
+						<li><a href="/reference/software/tracerdaq/start">TracerDAQ</a></li>
+						<li><a href="/reference/software/quickdaq/start">QuickDAQ</a></li>								
+						<li><a href="/reference/software/universal-library/start">Universal Library</a></li>
+						<li><a class="see-all"href="/reference/software/start">See All</a></li>	
+					</ul>
+				</li>
+			</ul>
+		</li>
+
+		<li class="vertical-divider">
+			|
+		</li>
+
+		<li class="nav-link nav-link-secondary">
+			<a href="https://digilent.com/blog" target="_blank" rel="noopener">Blog</a>
+		</li>
+
+		<li class="nav-link nav-link-secondary">
+			<a href="https://forum.digilent.com" target="_blank" rel="noopener">Forum</a>
+		</li>
+
+		<li class="dropdown nav-link nav-link-secondary">
+			<a href="#" class="dropdown-toggle" data-toggle="dropdown">Learn<b class="caret"></b></a>
+			<ul class="dropdown-menu dropdown-menu-lg row one-col hortop">
+				<li class="col-sm-12">
+					<ul>						
+						<li><a href="/reference/learn/courses/start">Courses</a></li>
+						<li><a href="https://digilent.com/projects/">Projects</a></li>
+					</ul>
+				</li>
+			</ul>
+		</li>
+
+		<li class="nav-link nav-link-secondary">
+			<a id="github-link" href="https://github.com/digilent" target="_blank" rel="noopener" title="Github">
+				<i id="github-icon" class="fa fa-github fa-lg"></i>
+				<span id="github-text">Digilent Github</span>
+			</a>
+		</li>
+
+		<li class="nav-link nav-link-secondary">
+			<a id="ideas-link" href="https://digilent.frill.co/signup" target="_blank" rel="noopener" title="Idea Space">
+				<i id="ideas-icon" class="fa fa-lightbulb-o fa-lg"></i>
+			</a>
+		</li>
+	</ul>
+</div>
+                            <!------------------------------------------------------------------------------------------				
+                            - END WIKI NAV
+                            ---------------------------------------------	--------------------------------------------->
+                            
+                    </div>
+                </div>
+            </div>	
+
+            <section id="sitewide-banner-slot"></section>
+        </div>
+
+	<!-------------------------------------END OF HEADER------------------------------------->
+        <div class="container not-header">
+            <div class="notifications hidden-print">
+                            </div>
+
+                        
+            				<div class="youarehere">
+					<ul class="breadcrumb hidden-print">You are here::&nbsp; <li class="home"><bdi><a href="https://digilent.com/reference/start" class="wikilink1" title="start" data-wiki-id="start">Digilent Reference</a></bdi></li> <li><bdi><a href="https://digilent.com/reference/programmable-logic/start" class="wikilink1" title="programmable-logic:start" data-wiki-id="programmable-logic:start">FPGA Development Boards</a></bdi></li> <li><bdi><a href="https://digilent.com/reference/programmable-logic/arty-a7/start" class="wikilink1" title="programmable-logic:arty-a7:start" data-wiki-id="programmable-logic:arty-a7:start">Arty A7</a></bdi></li> <li><bdi><a href="https://digilent.com/reference/programmable-logic/arty-a7/reference-manual" class="wikilink1" title="programmable-logic:arty-a7:reference-manual" data-wiki-id="programmable-logic:arty-a7:reference-manual">Arty A7 Reference Manual</a></bdi></li> </ul>				</div>
+			
+            
+            <section class="wrapper row"><!-- PAGE ACTIONS -->
+                <!-- ********** CONTENT ********** -->
+                <div id="dokuwiki__content" class="col-xs-12">
+                    
+                                        
+                    <!-- TOC START -->
+<div id="dw_toc" class="hidden-print panel panel-default pull-right col-sm-4 col-md-3 col-xs-12">
+<div class="panel-heading hidden-print"><h3 class="panel-title" data-toggle="collapse" data-target="#toc_contents">Table of Contents <b class="caret"></b></h3></div>
+<div id="toc_contents" class="hidden-print panel-collapse collapse in"><div class="panel-body">
+<ul class="">
+<li class="level1"><a href="#arty_a7_reference_manual">Arty A7 Reference Manual</a>
+<ul class="">
+<li class="level2"><a href="#features">Features</a></li>
+<li class="level2"><a href="#purchasing_options">1 Purchasing Options</a></li>
+<li class="level2"><a href="#designing_with_the_arty_a7">2 Designing with the Arty A7</a></li>
+<li class="level2"><a href="#power_supplies">3 Power Supplies</a></li>
+<li class="level2"><a href="#external_supply_voltage_monitoring">3.1 External Supply Voltage Monitoring</a></li>
+<li class="level2"><a href="#fpga_core_supply_current_monitoring">3.2 FPGA Core Supply Current Monitoring</a></li>
+<li class="level2"><a href="#v_supply_power_monitoring">3.3 5V Supply Power Monitoring</a></li>
+<li class="level2"><a href="#fpga_configuration">4 FPGA Configuration</a>
+<ul class="">
+<li class="level3"><a href="#jtag_configuration">4.1 JTAG Configuration</a></li>
+<li class="level3"><a href="#quad-spi_configuration">4.2 Quad-SPI Configuration</a></li>
+</ul>
+</li>
+<li class="level2"><a href="#memory">5 Memory</a>
+<ul class="">
+<li class="level3"><a href="#ddr3l">5.1 DDR3L</a></li>
+<li class="level3"><a href="#quad-spi_flash">5.2 Quad-SPI Flash</a></li>
+</ul>
+</li>
+<li class="level2"><a href="#ethernet_phy">6 Ethernet PHY</a></li>
+<li class="level2"><a href="#oscillatorsclocks">7 Oscillators/Clocks</a></li>
+<li class="level2"><a href="#usb-uart_bridge_serial_port">8 USB-UART Bridge (Serial Port)</a></li>
+<li class="level2"><a href="#basic_io">9 Basic I/O</a>
+<ul class="">
+<li class="level3"><a href="#tri-color_leds">9.1 Tri-Color LEDs</a></li>
+</ul>
+</li>
+<li class="level2"><a href="#pmod_connectors">10 Pmod Connectors</a></li>
+<li class="level2"><a href="#standard_pmod">10.1 Standard Pmod</a></li>
+<li class="level2"><a href="#high-speed_pmod">10.2 High-Speed Pmod</a></li>
+<li class="level2"><a href="#arduinochipkit_shield_connector">11 Arduino/chipKIT Shield Connector</a>
+<ul class="">
+<li class="level3"><a href="#shield_digital_io">11.1 Shield Digital I/O</a></li>
+<li class="level3"><a href="#shield_analog_io">11.2 Shield Analog I/O</a></li>
+</ul></li>
+</ul></li>
+</ul>
+</div></div></div>
+<!-- TOC END -->
+                    <div class="page row" role="main">
+                    <!-- wikipage start -->
+                        
+<h1 class="sectionedit1" id="arty_a7_reference_manual">Arty A7 Reference Manual</h1>
+<div class="level1">
+<div class="wrap_round wrap_info plugin_wrap" style="width: 650px; max-width: 100%;">
+<h4 id="note">Note</h4>
+
+<p>
+The Arty A7-35T variant is no longer in production and is now retired.
+</p>
+</div>
+<p>
+The Arty A7, formerly known as the Arty, is a ready-to-use development platform designed around the Artix-7™ Field Programmable Gate Array (FPGA) from Xilinx. It was designed specifically for use as a MicroBlaze Soft Processing System. When used in this context, the Arty A7 becomes the most flexible processing platform you could hope to add to your collection, capable of adapting to whatever your project requires. Unlike other Single Board Computers, the Arty A7 isn&#039;t bound to a single set of processing peripherals: One moment it&#039;s a communication powerhouse chock-full of UARTs, SPIs, IICs, and an Ethernet MAC, and the next it&#039;s a meticulous timekeeper with a dozen 32-bit timers.
+</p>
+
+<p>
+<div class='image-gallery'>
+	
+	
+	<div class='large-image'>
+		<a id='gallery-large-image-link' href='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-0.png'>
+			<img id='gallery-large-image' src='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-0.png'>
+		</a>
+	</div>
+	
+	
+	<div class='thumbnails'>
+		
+		
+		<img id='thumbnail0' src='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-0.png' onmouseover='thumbnailHover(this)'>
+		
+		<img id='thumbnail1' src='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-2.png' onmouseover='thumbnailHover(this)'>
+		
+		<img id='thumbnail2' src='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-3.png' onmouseover='thumbnailHover(this)'>
+		
+		<img id='thumbnail3' src='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-4.png' onmouseover='thumbnailHover(this)'>
+		
+		<img id='thumbnail4' src='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-5.png' onmouseover='thumbnailHover(this)'>
+		
+		<img id='thumbnail5' src='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-6.png' onmouseover='thumbnailHover(this)'>
+		
+		<img id='thumbnail6' src='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-7.png' onmouseover='thumbnailHover(this)'>
+		
+		<img id='thumbnail7' src='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-8.png' onmouseover='thumbnailHover(this)'>
+		
+		<img id='thumbnail8' src='https://digilent.com/reference/_media/reference/programmable-logic/arty/arty-9.png' onmouseover='thumbnailHover(this)'>
+			
+			
+	</div>
+</div>
+</p>
+<hr />
+
+</div>
+
+<h4 id="additional_important_documentation">Additional Important Documentation:</h4>
+<div class="level4">
+<ul>
+<li class="level1"><div class="li"> <a href="https://digilent.com/reference/lib/exe/fetch.php?tok=a2aed5&amp;media=https%3A%2F%2Ffiles.digilent.com%2Fresources%2Fdocuments%2FEMC_DISCLAIMER_DIGILENT_DEVELOPMENT_AND_EVALUATION_KITS.pdf" class="media mediafile mf_pdf" target="_tab " title="https://files.digilent.com/resources/documents/EMC_DISCLAIMER_DIGILENT_DEVELOPMENT_AND_EVALUATION_KITS.pdf" rel="noopener"> EMC Disclaimer, Digilent Development and Evaluation Kits</a></div>
+</li>
+</ul>
+
+</div>
+
+<h2 class="sectionedit4" id="features">Features</h2>
+<div class="level2">
+<ul>
+<li class="level1 node"><div class="li"> Xilinx Artix-7 FPGA</div>
+<ul>
+<li class="level2"><div class="li"> 5,200 slices containing four 6-input LUTs and 8 flip-flops (15,850 slices)<sup><a href="#refnotes:1:note1" name="refnotes:1:ref1" class="refnotes-ref">1)</a></sup></div>
+</li>
+<li class="level2"><div class="li"> 1,800 Kbits of fast block <abbr title="Random Access Memory">RAM</abbr> (4,860 Kbits)<sup><a href="#refnotes:1:note1" name="refnotes:1:ref2" class="refnotes-ref">2)</a></sup></div>
+</li>
+<li class="level2"><div class="li"> 5 clock management tiles (CMTs), each with a phase-locked loop and mixed-mode clock manager (6 CMTs)<sup><a href="#refnotes:1:note1" name="refnotes:1:ref3" class="refnotes-ref">3)</a></sup></div>
+</li>
+<li class="level2"><div class="li"> 90 DSP slices (240 DSP slices)<sup><a href="#refnotes:1:note1" name="refnotes:1:ref4" class="refnotes-ref">4)</a></sup></div>
+</li>
+<li class="level2"><div class="li"> Internal clock speeds exceeding 450MHz</div>
+</li>
+<li class="level2"><div class="li"> On-chip analog-to-digital converter (XADC)</div>
+</li>
+<li class="level2"><div class="li"> Programmable over JTAG and Quad-SPI Flash</div>
+</li>
+</ul>
+</li>
+<li class="level1 node"><div class="li"> System Features</div>
+<ul>
+<li class="level2"><div class="li"> 256MB DDR3L with a 16-bit bus @ 333MHz</div>
+</li>
+<li class="level2"><div class="li"> 16MB Quad-SPI Flash</div>
+</li>
+<li class="level2"><div class="li"> USB-JTAG Programming circuitry </div>
+</li>
+<li class="level2"><div class="li"> Powered from USB or any 7V-15V source</div>
+</li>
+</ul>
+</li>
+<li class="level1 node"><div class="li"> System Connectivity</div>
+<ul>
+<li class="level2"><div class="li"> 10/100 Mbps Ethernet</div>
+</li>
+<li class="level2"><div class="li"> USB-UART Bridge</div>
+</li>
+</ul>
+</li>
+<li class="level1 node"><div class="li"> Interaction and Sensory Devices</div>
+<ul>
+<li class="level2"><div class="li"> 4 Switches</div>
+</li>
+<li class="level2"><div class="li"> 4 Buttons</div>
+</li>
+<li class="level2"><div class="li"> 1 Reset Button</div>
+</li>
+<li class="level2"><div class="li"> 4 LEDs</div>
+</li>
+<li class="level2"><div class="li"> 4 RGB LEDs</div>
+</li>
+</ul>
+</li>
+<li class="level1 node"><div class="li"> Expansion Connectors</div>
+<ul>
+<li class="level2"><div class="li"> 4 Pmod connectors</div>
+</li>
+<li class="level2"><div class="li"> Arduino/ChipKit Shield connector</div>
+</li>
+</ul>
+</li>
+</ul>
+<div class="refnotes">
+<hr>
+<div class="notes">
+<div class="note justify">
+<sup><b><a href="#refnotes:1:ref1" name="refnotes:1:note1" class="backref">1)</a></b>,
+<b><a href="#refnotes:1:ref2" class="backref">2)</a></b>,
+<b><a href="#refnotes:1:ref3" class="backref">3)</a></b>,
+<b><a href="#refnotes:1:ref4" class="backref">4)</a></b></sup>
+<span id="refnotes:1:note1:text">
+Arty A7-100 variant value in parentheses where different
+</span></div>
+</div>
+</div>
+
+<p>
+The Arty A7 is fully compatible with the high-performance Vivado ® Design Suite. No license is required, so designs can be implemented at no additional cost. This includes the ability to create MicroBlaze™ soft-core processor designs. Design resources, example projects, and tutorials are available for download at the <a href="https://digilent.com/reference/programmable-logic/arty-a7/start" class="wikilink1" title="programmable-logic:arty-a7:start" data-wiki-id="programmable-logic:arty-a7:start">Arty A7 Resource Center</a>.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/reference/programmable-logic/arty-a7/arty-a7-callout.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="reference:programmable-logic:arty-a7:arty-a7-callout.png" rel="noopener"><img src="https://digilent.com/reference/_media/reference/programmable-logic/arty-a7/arty-a7-callout.png?w=800&amp;tok=67dac5" class="mediacenter" loading="lazy" title="Arty A7 Callout Diagram." alt="Arty A7 Callout Diagram." width="800" /></a>
+</p>
+<div class="table sectionedit5"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0 leftalign"> Callout  </th><th class="col1 leftalign"> Description                              </th><th class="col2 leftalign"> Callout  </th><th class="col3 leftalign"> Description                           </th><th class="col4 leftalign"> Callout  </th><th class="col5 leftalign"> Description                               </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<td class="col0 leftalign"> 1        </td><td class="col1 leftalign"> FPGA programming DONE <abbr title="Light Emitting Diode">LED</abbr>                </td><td class="col2 leftalign"> 8        </td><td class="col3 leftalign"> User LEDs                             </td><td class="col4 leftalign"> 15       </td><td class="col5 leftalign"> chipKIT processor reset                   </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0 leftalign"> 2        </td><td class="col1 leftalign"> Shared USB JTAG / UART port              </td><td class="col2 leftalign"> 9        </td><td class="col3 leftalign"> User slide switches                   </td><td class="col4 leftalign"> 16       </td><td class="col5 leftalign"> Pmod connectors                           </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0 leftalign"> 3        </td><td class="col1 leftalign"> Ethernet connector                       </td><td class="col2 leftalign"> 10       </td><td class="col3 leftalign"> User push buttons                     </td><td class="col4 leftalign"> 17       </td><td class="col5 leftalign"> FPGA programming reset button             </td>
+	</tr>
+	<tr class="row4">
+		<td class="col0 leftalign"> 4        </td><td class="col1 leftalign"> MAC address sticker                      </td><td class="col2 leftalign"> 11       </td><td class="col3 leftalign"> Arduino/chipKIT shield connectors     </td><td class="col4 leftalign"> 18       </td><td class="col5 leftalign"> SPI flash memory                          </td>
+	</tr>
+	<tr class="row5">
+		<td class="col0 leftalign"> 5        </td><td class="col1 leftalign"> Power jack for optional external supply  </td><td class="col2 leftalign"> 12       </td><td class="col3 leftalign"> Arduino/chipKIT shield SPI connector  </td><td class="col4 leftalign"> 19       </td><td class="col5 leftalign"> Artix FPGA                                </td>
+	</tr>
+	<tr class="row6">
+		<td class="col0 leftalign"> 6        </td><td class="col1 leftalign"> Power good <abbr title="Light Emitting Diode">LED</abbr>                           </td><td class="col2 leftalign"> 13       </td><td class="col3 leftalign"> chipKIT processor reset jumper        </td><td class="col4 leftalign"> 20       </td><td class="col5 leftalign"> Micron DDR3 memory                        </td>
+	</tr>
+	<tr class="row7">
+		<td class="col0 leftalign"> 7        </td><td class="col1 leftalign"> User RGB LEDs                            </td><td class="col2 leftalign"> 14       </td><td class="col3 leftalign"> FPGA programming mode                 </td><td class="col4 leftalign"> 21       </td><td class="col5 leftalign"> Dialog Semiconductor DA9062 power supply  </td>
+	</tr>
+</table></div>
+<hr />
+
+</div>
+
+<h2 class="sectionedit6" id="purchasing_options">1 Purchasing Options</h2>
+<div class="level2">
+
+<p>
+The Arty A7 can be purchased with either a XC7A35 or XC7A100 FPGA loaded. These two Arty A7 product variants are referred to as the Arty A7-35 and Arty A7-100, respectively. When Digilent documentation describes functionality that is common to both of these variants, they are referred to collectively as the “Arty A7”. When describing something that only applies to a specific variant, the variant will be explicitly called out by its name.
+</p>
+
+<p>
+The only difference between the Arty A7-35 and Arty A7-100 are the capabilities of the Artix-7 part. The Artix-7 FPGAs both have the same functionality, but the -100 has about a 3 times larger internal FPGA than the -35. The differences between the two variants are summarized below:
+</p>
+<div class="table sectionedit7"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0 leftalign"> Product Variant         </th><th class="col1 leftalign"> Arty A7-35 (No longer in production)  </th><th class="col2 leftalign"> Arty A7-100       </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<th class="col0 leftalign"> FPGA Part Number        </th><td class="col1 leftalign"> XC7A35TICSG324-1L                     </td><td class="col2 leftalign"> XC7A100TCSG324-1  </td>
+	</tr>
+	<tr class="row2">
+		<th class="col0 leftalign"> Look-up Tables (LUTs)   </th><td class="col1 leftalign"> 5,200                                 </td><td class="col2 leftalign"> 15,850            </td>
+	</tr>
+	<tr class="row3">
+		<th class="col0 leftalign"> Flip-Flops              </th><td class="col1 leftalign"> 29,200                                </td><td class="col2 leftalign"> 126,800           </td>
+	</tr>
+	<tr class="row4">
+		<th class="col0 leftalign"> Block <abbr title="Random Access Memory">RAM</abbr>               </th><td class="col1 leftalign"> 225 KB                                </td><td class="col2 leftalign"> 607.5 KB          </td>
+	</tr>
+	<tr class="row5">
+		<th class="col0 leftalign"> Clock Management Tiles  </th><td class="col1 leftalign"> 5                                     </td><td class="col2 leftalign"> 6                 </td>
+	</tr>
+</table></div>
+
+<p>
+The board is sold standalone, but requires either a micro USB cable or 7-15V external power supply to be powered. The external power supply must have a coaxial, center-positive connector with 2.1 mm or 2.5 mm internal diameter. When purchased from Digilent, a micro USB cable or suitable 12V, 3A power supply can be added at the time of purchase.
+</p>
+
+<p>
+For more information on purchasing, see the <a href="https://digilent.com/shop/arty-a7-100t-artix-7-fpga-development-board/" class="urlextern" target="_tab" title="https://digilent.com/shop/arty-a7-100t-artix-7-fpga-development-board/" rel="ugc nofollow noopener">Arty A7 Product Page</a>.
+</p>
+<hr />
+
+</div>
+
+<h2 class="sectionedit8" id="designing_with_the_arty_a7">2 Designing with the Arty A7</h2>
+<div class="level2">
+
+<p>
+<a href="https://digilent.com/reference/_detail/arty/arty_vivadoipi.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="arty:arty_vivadoipi.png" rel="noopener"><img src="https://digilent.com/reference/_media/arty/arty_vivadoipi.png?w=600&amp;tok=9100d1" class="mediaright" loading="lazy" title=" Figure 2.1. Vivado IPI" alt=" Figure 2.1. Vivado IPI" width="600" /></a>
+</p>
+
+<p>
+<em>Figure 2.1 Vivado IPI</em>
+</p>
+
+<p>
+What makes the Arty A7 so flexible is its FPGA. Among their many features, FPGAs have the ability to transform into a custom software-defined System-on-a-Chip (SoC). These “Soft SoC” FPGA configurations are designed graphically using a tool called Vivado IP Integrator (Vivado IPI). In this tool, pre-built peripheral blocks are dragged from an extensive library and dropped into your processing system as you see fit. These pre-built peripherals include timers, UART/SPI/IIC controllers, and many of the other devices you would typically find in an SoC or microcontroller. Ambitious users will also find that they can create their own peripheral blocks by writing them in a Hardware Definition Language (HDL), specifically Verilog or VHDL. For those with no interest in learning HDL, the Xilinx High Level Synthesis tool can be used to define custom peripheral blocks by writing them in C.
+</p>
+
+<p>
+The Arty A7&#039;s Soft SoC configurations are powered by MicroBlaze processor cores. MicroBlaze is a 32-bit RISC soft processor core, designed specifically to be used in Xilinx FPGAs. The MicroBlaze processor in an SoC configuration is typically run at 100 <abbr title="Megahertz (million times per second)">MHz</abbr>, though it is possible to design your SoC so that it can operate at over 200MHz. The Arty A7 supports large MicroBlaze programs with demanding memory requirements by providing 16MB of non-volatile program memory and 256MB of DDR3L <abbr title="Random Access Memory">RAM</abbr>.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/arty/arty_xsdk.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="arty:arty_xsdk.png" rel="noopener"><img src="https://digilent.com/reference/_media/arty/arty_xsdk.png?w=575&amp;tok=dc1144" class="medialeft" loading="lazy" title="Figure 2.2. Xilinx SDK" alt="Figure 2.2. Xilinx SDK" width="575" /></a>
+</p>
+
+<p>
+<em>Figure 2.2 Xilinx SDK</em>
+</p>
+
+<p>
+After you design your soft SoC configuration for the Arty A7 you can start writing programs for it. This is done by exporting your SoC design out of Vivado IPI and into the Xilinx Software Development Kit (XSDK), an Integrated Development Environment (IDE) for designing/debugging MicroBlaze programs in C. After the IPI to XSDK handoff, XSDK is automatically configured to include libraries and examples for the peripheral blocks you&#039;ve included in your SoC. At this point, programming the Arty is very similar to programming other SoC or microcontroller platforms: Programs are written in C, programmed into board over USB, and then optionally debugged in hardware. Soft SoC configurations and MicroBlaze programs can also be loaded into the 16MB non-volatile program memory so that they execute immediately after the Arty is powered on.
+</p>
+
+<p>
+Although the Arty A7 is particularly well suited for Microblaze Soft SoC designs, it can also be programmed with a Register-Transfer Level (RTL) circuit description like any other FPGA development platform. This design flow requires that you describe your RTL circuit using an HDL within Vivado, and it does not use the Vivado IPI or XSDK tools. Designing this way has many advantages, but is very unlike programming a single board computer, and instead is used by those familiar with FPGA design or interested in designing and implementing a digital circuit that doesn&#039;t contain a processor. 
+</p>
+<hr />
+
+</div>
+
+<h2 class="sectionedit9" id="power_supplies">3 Power Supplies</h2>
+<div class="level2">
+
+<p>
+The Arty A7 requires a 5 volt power source to operate. This power source can come from the Digilent USB-JTAG port (J10) or it can be derived from a 7 to 15 Volt DC power supply that’s connected to the Power Jack (J13) or Pin 8 of Header J7.
+</p>
+
+<p>
+A power-good <abbr title="Light Emitting Diode">LED</abbr> (LD11), driven by the 3.3V output (VCC3V3) of the DA9062 regulator, indicates that the board is receiving power and that the onboard supplies are functioning as expected. If this <abbr title="Light Emitting Diode">LED</abbr> does not illuminate when an acceptable power supply is connected, please contact your distributor of <a href="http://forum.digilent.com" class="urlextern" target="_tab" title="http://forum.digilent.com" rel="ugc nofollow noopener">Digilent Support</a> for further help.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/reference/programmable-logic/arty-a7/arty-a7-rev-e-power.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="reference:programmable-logic:arty-a7:arty-a7-rev-e-power.png" rel="noopener"><img src="https://digilent.com/reference/_media/reference/programmable-logic/arty-a7/arty-a7-rev-e-power.png" class="mediacenter" loading="lazy" title="Figure 3.1 Arty A7 Power Circuit" alt="Figure 3.1 Arty A7 Power Circuit" /></a>
+</p>
+
+<p>
+<em>Figure 3.1 Arty A7 Power Circuit</em>
+</p>
+
+<p>
+The USB port can deliver enough power for the vast majority of designs. However, a few demanding applications, including any that drive multiple peripheral boards, might require more power than the USB port can provide. Also, some applications may need to run without being connected to a PC’s USB port. In these instances an external power supply or battery pack can be used.
+</p>
+
+<p>
+An external power supply can be used by plugging into Power Jack J13. The supply must use a coaxial, center-positive 2.1mm (or 2.5mm) internal-diameter plug, and provide a voltage of 7 to 15 Volts DC. The supply should provide a minimum current of 1 amp. Ideally, the supply should be capable of providing 36 Watts of power (12 Volts DC, 3 amps).
+</p>
+
+<p>
+An external battery pack can be used by connecting the battery&#039;s positive terminal to pin 8 of J7 (labeled VIN) and the negative terminal to pin 7 of J7 (labeled <abbr title="Ground">GND</abbr>), as shown in Figure 3.2. The battery must provide a voltage between 7 and 15 volts DC, and should <strong>NOT</strong> be installed while there is a supply connected to Power Jack J13.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/arty/arty_rm_power-02.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="arty:arty_rm_power-02.png" rel="noopener"><img src="https://digilent.com/reference/_media/arty/arty_rm_power-02.png?w=200&amp;tok=116cc7" class="mediacenter" loading="lazy" title="Figure 3.2. Arty A7 Battery Pack Connection." alt="Figure 3.2. Arty A7 Battery Pack Connection." width="200" /></a>
+</p>
+
+<p>
+<em>Figure 3.2 Arty A7 Battery Pack Connection</em>
+</p>
+
+<p>
+The Arty A7 uses a combination of a USB load switch (IC13), a MOSFET, (Q8), and some additional control circuitry to automatically determine the 5V power source based on the supplies that are plugged into the board. If an external supply is connected to Power Jack J13, it will be used as the input source regardless of whether or not anything is plugged into the USB port (J10). If the Arty A7 is initially powered via USB and an external supply is plugged into J13, then the the 5V power source will automatically switch over to the regulated external supply rail and no brown-out will occur. If the external supply is later disconnected from Power Jack J13 while USB power is still present, then the 5V power source will switch over to USB power, and a brown-out - which can be seen as the power-good <abbr title="Light Emitting Diode">LED</abbr> toggles - will occur.
+</p>
+
+<p>
+Voltage regulator circuits from Dialog Semiconductor and Texas Instruments create the required 3.3V, 1.8V, 1.35V, 1.25V, 1.00V, 0.675V supplies from the 5V power source. In the event that an external supply or battery pack is used, the on-board Monolithic Power Systems 5V regulator (IC12) provides the 5V source. Table 3.1 provides additional information (typical currents depend strongly on FPGA configuration and the values provided are typical of medium size/speed designs).
+</p>
+<div class="table sectionedit10"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0 leftalign"> Supply  </th><th class="col1 leftalign"> Circuits                                                                     </th><th class="col2 leftalign"> Device                             </th><th class="col3 leftalign"> Maximum Current    </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<td class="col0 leftalign"> 5.0V    </td><td class="col1 leftalign"> Onboard Regulators, RGB LEDs                                                 </td><td class="col2 leftalign"> IC13: ON Semiconductor NCP380      </td><td class="col3 leftalign"> 1.0A (5.0A)<sup><a href="#refnotes:2:note1" name="refnotes:2:ref1" class="refnotes-ref">1)</a></sup>  </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0 leftalign"> 3.3V    </td><td class="col1 leftalign"> FPGA I/O, Clocks, Flash, PMODs, LEDs, Buttons, Switches, USB port, Ethernet  </td><td class="col2 leftalign"> IC11: Dialog Semiconductor DA9062  </td><td class="col3 leftalign"> 2.0A               </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0 leftalign"> 0.95V (1.0V)<sup><a href="#refnotes:2:note2" name="refnotes:2:ref2" class="refnotes-ref">2)</a></sup>    </td><td class="col1 leftalign"> FPGA Core and Block <abbr title="Random Access Memory">RAM</abbr>  </td><td class="col2 leftalign"> IC11: Dialog Semiconductor DA9062  </td><td class="col3 leftalign"> 2.5A               </td>
+	</tr>
+	<tr class="row4">
+		<td class="col0 leftalign"> 1.8V    </td><td class="col1 leftalign"> FPGA Auxiliary                                                               </td><td class="col2 leftalign"> IC11: Dialog Semiconductor DA9062  </td><td class="col3 leftalign"> 1.5A               </td>
+	</tr>
+	<tr class="row5">
+		<td class="col0 leftalign"> 1.35V   </td><td class="col1 leftalign"> DDR3L and associated FPGA bank                                               </td><td class="col2 leftalign"> IC11: Dialog Semiconductor DA9062  </td><td class="col3 leftalign"> 2.5A               </td>
+	</tr>
+	<tr class="row6">
+		<td class="col0 leftalign"> 0.675V  </td><td class="col1 leftalign"> DDR3L                                                                        </td><td class="col2 leftalign"> IC17: Diodes Incorporated AP2303   </td><td class="col3 leftalign"> 1.75A              </td>
+	</tr>
+	<tr class="row7">
+		<td class="col0 leftalign"> 1.25V   </td><td class="col1 leftalign"> XADC Analog Reference                                                        </td><td class="col2 leftalign"> IC14: Texas Instruments REF3012    </td><td class="col3 leftalign"> 25mA               </td>
+	</tr>
+</table></div>
+
+<p>
+<em>Table 3.1. Arty A7 Power Rails.</em>
+</p>
+<div class="refnotes">
+<hr>
+<div class="notes">
+<div class="note justify">
+<sup><b><a href="#refnotes:2:ref1" name="refnotes:2:note1" class="backref">1)</a></b></sup>
+<span id="refnotes:2:note1:text">
+With external power provided via Power Jack J13
+</span></div>
+<div class="note justify">
+<sup><b><a href="#refnotes:2:ref2" name="refnotes:2:note2" class="backref">2)</a></b></sup>
+<span id="refnotes:2:note2:text">
+Arty A7-100 variant value in parentheses
+</span></div>
+</div>
+</div>
+
+</div>
+
+<h2 class="sectionedit11" id="external_supply_voltage_monitoring">3.1 External Supply Voltage Monitoring</h2>
+<div class="level2">
+
+<p>
+The Arty A7 includes circuitry for monitoring the voltage of an external supply connected to Power Jack J13 or an external battery pack connected to Header J7. A voltage divider is used to scale the unregulated input voltage, VU, to be within the range (0-1V) that the on-chip 12-bit <abbr title="Analog-to-Digital Converter">ADC</abbr> is capable of measuring. The unregulated input voltage, VU, is divided by 16 and then fed into Auxiliary Channel 2 on the XADC of the Artix-7. Applications that wish to monitor the voltage of an external supply may configure Channel 2 of the XADC as a unipolar input and perform a conversion to receive a digital value corresponding to the input voltage. Figure 3.1.1 provides an overview of the circuitry that allows an external supply voltage to be monitored.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/reference/programmable-logic/arty-a7/arty-a7-vu-mon.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="reference:programmable-logic:arty-a7:arty-a7-vu-mon.png" rel="noopener"><img src="https://digilent.com/reference/_media/reference/programmable-logic/arty-a7/arty-a7-vu-mon.png" class="mediacenter" loading="lazy" title="Figure 3.1.1 Monitoring External Supply Voltage" alt="Figure 3.1.1 Monitoring External Supply Voltage" /></a>
+</p>
+
+<p>
+<em>Figure 3.1.1 Monitoring External Supply Voltage</em>
+</p>
+
+</div>
+
+<h2 class="sectionedit12" id="fpga_core_supply_current_monitoring">3.2 FPGA Core Supply Current Monitoring</h2>
+<div class="level2">
+
+<p>
+The Arty A7 includes circuitry for monitoring the current consumed by the FPGA core. The current is monitored by measuring the voltage across a 10 milliohm sense resistor that’s placed between the output of the DC-DC converter system (IC11, Channel 1) and the VCCINT network. A current sense amplifier (IC16, Texas Instruments INA199A1) connected across the sense resistor provides a gain of 50 and produces an output voltage of 500 millivolts per amp of current. Currents above 2 Amps will not damage the circuit or the FPGA, but will be reported as 2 Amps. The output of the current sense amplifier is fed into Auxiliary Channel 10 on the XADC of the Artix-7 FPGA. Applications that wish to monitor the current consumption of the FPGA Core and Block <abbr title="Random Access Memory">RAM</abbr> may configure Channel 10 of the XADC as a unipolar input and perform a conversion to receive a digital value that corresponds to the amplified sense resistor voltage. This current sense circuit is capable of measuring current between 0 and 2 Amps. Figure 3.2.1 provides an overview of the circuitry that allows the FPGA Core Supply current to be monitored.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/reference/programmable-logic/arty-a7/arty-a7-vccint-mon.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="reference:programmable-logic:arty-a7:arty-a7-vccint-mon.png" rel="noopener"><img src="https://digilent.com/reference/_media/reference/programmable-logic/arty-a7/arty-a7-vccint-mon.png" class="mediacenter" loading="lazy" title="Figure 3.2.1 FPGA Core Supply Current Monitoring" alt="Figure 3.2.1 FPGA Core Supply Current Monitoring" /></a>
+</p>
+
+<p>
+<em>Figure 3.2.1 FPGA Core Supply Current Monitoring</em>
+</p>
+
+</div>
+
+<h2 class="sectionedit13" id="v_supply_power_monitoring">3.3 5V Supply Power Monitoring</h2>
+<div class="level2">
+
+<p>
+The Arty A7 includes circuitry for monitoring the voltage of the 5 Volt supply as well as the current consumed from this supply. A voltage divider is used to scale the 5V input voltage to be within the range (0-1V) that the on-chip 12-bit <abbr title="Analog-to-Digital Converter">ADC</abbr> is capable of measuring. The 5V supply voltage is divided by 5.99 and then fed into Auxiliary Channel 1 on the XADC of the Artix-7 FPGA. A combination of a 5 milliohm current sense resistor and a current sense amplifier (IC15, Texas Instruments INA199A1) are used to produce an output voltage of 250 millivolts per amp of current. This current sense circuit is capable of measuring current between 0 and 2 Amps. Currents above 4 Amps will not damage the circuit or the FPGA, but will be reported as only 4 Amps. The output of the current sense amplifier is fed into Auxiliary Channel 9 on the XADC of the Artix-7 FPGA. Applications that wish to monitor the instantaneous power consumption of the Arty A7 may configure Channels 1 and 9 of the XADC as unipolar inputs and then perform a simultaneous conversion of the two channels to receive digital values that can be used to compute the instantaneous power consumption. Figure 3.3.1 provides an overview of the circuitry that allows the 5V supply power consumption to be monitored.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/reference/programmable-logic/arty-a7/arty-a7-vu-mon.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="reference:programmable-logic:arty-a7:arty-a7-vu-mon.png" rel="noopener"><img src="https://digilent.com/reference/_media/reference/programmable-logic/arty-a7/arty-a7-vu-mon.png" class="mediacenter" loading="lazy" title="Figure 3.3.1 5V Supply Power Monitoring" alt="Figure 3.3.1 5V Supply Power Monitoring" /></a>
+</p>
+
+<p>
+<em>Figure 3.3.1 5V Supply Power Monitoring</em>
+</p>
+<hr />
+
+</div>
+
+<h2 class="sectionedit14" id="fpga_configuration">4 FPGA Configuration</h2>
+<div class="level2">
+
+<p>
+After power-on, the Artix-7 FPGA must be configured (or programmed) before it can perform any functions. You can configure the FPGA in one of two ways:
+</p>
+<ol>
+<li class="level1"><div class="li"> A PC can use the Digilent USB-JTAG circuitry (port J10) to program the FPGA any time the power is on.</div>
+</li>
+<li class="level1"><div class="li"> A file stored in the nonvolatile serial (SPI) flash device can be transferred to the FPGA using the SPI port. </div>
+</li>
+</ol>
+
+<p>
+<a href="https://digilent.com/reference/_detail/arty/arty_cfg.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="arty:arty_cfg.png" rel="noopener"><img src="https://digilent.com/reference/_media/arty/arty_cfg.png?w=600&amp;tok=29a399" class="mediacenter" loading="lazy" title="Figure 4.1. Arty A7 Configuration." alt="Figure 4.1. Arty A7 Configuration." width="600" /></a>
+</p>
+
+<p>
+<em>Figure 4.1 Arty A7 Configuration</em>
+</p>
+
+<p>
+Figure 4.1 shows the different options available for configuring the FPGA. An on-board “mode” jumper (JP1) selects whether the FPGA will be programmed by the Quad-SPI flash on power up.
+</p>
+
+<p>
+The FPGA configuration data is stored in files called bitstreams that have the .bit file extension. The ISE or Vivado software from Xilinx can create bitstreams from VHDL, Verilog®, or schematic-based source files (in the ISE toolset, EDK is used for MicroBlaze™ embedded processor-based designs). 
+</p>
+
+<p>
+Bitstreams are stored in volatile memory cells within the FPGA. This data defines the FPGA’s logic functions and circuit connections, and it remains valid until it is erased by removing board power, by pressing the reset button attached to the PROG input, or by writing a new configuration file using the JTAG port.
+</p>
+
+<p>
+An Artix-7 35T bitstream is typically 17,536,096 bits. An A7-100T bitstream is typically 30,606,304 bits. The time it takes to program the Arty A7 can be decreased by compressing the bitstream before programming, and then allowing the FPGA to decompress the bitstream itself during configuration. Depending on design complexity, compression ratios of 10x can be achieved. Bitstream compression can be enabled within the Xilinx tools (ISE or Vivado) to occur during generation. For instructions on how to do this, consult the Xilinx documentation for the toolset being used.
+</p>
+
+<p>
+After being successfully programmed, the FPGA will cause the “DONE” <abbr title="Light Emitting Diode">LED</abbr> to illuminate. Pressing the “PROG” button at any time will reset the configuration memory in the FPGA. After being reset, the FPGA will immediately attempt to reprogram itself from whatever method has been selected by the programming mode jumpers.
+</p>
+
+<p>
+The following sections provide greater detail about programming the Arty A7 using the different methods available.
+</p>
+
+</div>
+
+<h3 class="sectionedit15" id="jtag_configuration">4.1 JTAG Configuration</h3>
+<div class="level3">
+
+<p>
+The Xilinx tools typically communicate with FPGAs using the Test Access Port and Boundary-Scan Architecture, commonly referred to as JTAG. During JTAG programming, a .bit file is transferred from the PC to the FPGA using the onboard Digilent USB-JTAG circuitry (port J10) or an external JTAG programmer, such as the Digilent JTAG-HS2, attached to port J8. You can perform JTAG programming any time after the Arty A7 has been powered on, regardless of whether the mode jumper (JP1) is set. If the FPGA is already configured, then the existing configuration is overwritten with the bitstream being transmitted over JTAG. Not setting the mode jumper (seen in Figure 4.1) is useful to prevent the FPGA from being configured from Quad-SPI Flash until a JTAG programming occurs.
+</p>
+
+<p>
+Programming the Arty A7 with an uncompressed bitstream using the on-board USB-JTAG circuitry usually takes around 6 seconds. JTAG programming can be done using the hardware manager in Vivado or the iMPACT tool included with ISE. 
+</p>
+
+</div>
+
+<h3 class="sectionedit16" id="quad-spi_configuration">4.2 Quad-SPI Configuration</h3>
+<div class="level3">
+
+<p>
+Since the FPGA&#039;s memory on the Arty A7 is volatile, it relies on the Quad-SPI flash memory to store the configuration between power cycles. This configuration mode is called Master SPI. The blank FPGA takes the role of master and reads the configuration file out of the flash device upon power-up. To that effect, a configuration file needs to be downloaded first to the flash. When programming a nonvolatile flash device, a bitstream file is transferred to the flash in a two-step process. First, the FPGA is programmed with a circuit that can program flash devices, and then data is transferred to the flash device via the FPGA circuit (this complexity is hidden from the user by the Xilinx tools). This is called indirect programming. After the flash device has been programmed, it can automatically configure the FPGA at a subsequent power-on or reset event as determined by the mode jumper setting (see Figure 4.1). Programming files stored in the flash device will remain until they are overwritten, regardless of power-cycle events.
+</p>
+
+<p>
+Programming the flash can take as long as four to five minutes, which is mostly due to the lengthy erase process inherent to the memory technology. Once written however, FPGA configuration can be very fast—less than a second. Bitstream compression, SPI bus width, and configuration rate are factors controlled by the Xilinx tools that can affect configuration speed. The Arty A7 supports x1, x2, and x4 bus widths and data rates of up to 50 <abbr title="Megahertz (million times per second)">MHz</abbr> for Quad-SPI programming.
+</p>
+
+<p>
+Quad-SPI programming can be done using the hardware manager in Vivado or with the iMPACT tool included with ISE. 
+</p>
+<hr />
+
+</div>
+
+<h2 class="sectionedit17" id="memory">5 Memory</h2>
+<div class="level2">
+
+<p>
+The Arty A7 contains two external memories: a 256MB DDR3L SDRAM and a 128Mb (16MB) non-volatile serial Flash device. The DDR3L module is connected to the FPGA using the industry standard interface. The serial Flash is on a dedicated quad-mode (x4) SPI bus. The connections and pin assignments between the FPGA and external memories are shown below.
+</p>
+
+</div>
+
+<h3 class="sectionedit18" id="ddr3l">5.1 DDR3L</h3>
+<div class="level3">
+
+<p>
+The Arty includes one MT41K128M16JT-125 memory component, creating a single rank, 16-bit wide interface. It is routed to a 1.35V-powered HR (High Range) FPGA bank with 50 ohm controlled single-ended trace impedance. 50 ohm internal terminations in the FPGA are used to match the trace characteristics. Similarly, on the memory side, on-die terminations (ODT) are used for impedance matching.
+</p>
+
+<p>
+For proper operation of the memory, a memory controller and physical layer (PHY) interface needs to be included in the FPGA design. The easiest way to accomplish this on the Arty A7 is to use the Xilinx 7-series memory interface solutions core generated by the MIG (Memory Interface Generator) Wizard. Depending on the tool used (ISE, EDK or Vivado), the MIG Wizard can generate a native FIFO-style or an AXI4 interface to connect to user logic. This workflow allows the customization of several DDR parameters optimized for the particular application. Table 2 below lists the MIG Wizard settings optimized for the Arty.
+</p>
+<div class="table sectionedit19"><table class="inline">
+	<tr class="row0">
+		<td class="col0 leftalign" colspan="2"> <strong>Table 2. DDR3L settings for the Arty A7.</strong>                                </td>
+	</tr>
+	<tr class="row1">
+		<td class="col0 leftalign"> <strong>Setting</strong>                                   </td><td class="col1 leftalign"> <strong>Value</strong>                    </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0 leftalign"> Memory type                                   </td><td class="col1 leftalign"> DDR3 SDRAM                   </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0 leftalign"> Max. clock period                             </td><td class="col1 leftalign"> 3000 ps (667 MT/s data rate)  </td>
+	</tr>
+	<tr class="row4">
+		<td class="col0 leftalign"> Memory part                                   </td><td class="col1 leftalign"> MT41K128M16JT-125            </td>
+	</tr>
+	<tr class="row5">
+		<td class="col0 leftalign"> Memory Voltage                                </td><td class="col1 leftalign"> 1.35 V                       </td>
+	</tr>
+	<tr class="row6">
+		<td class="col0 leftalign"> Data width                                    </td><td class="col1 leftalign"> 16                           </td>
+	</tr>
+	<tr class="row7">
+		<td class="col0 leftalign"> Data mask                                     </td><td class="col1 leftalign"> Enabled                      </td>
+	</tr>
+	<tr class="row8">
+		<td class="col0 leftalign"> Recommended Input Clock Period                </td><td class="col1 leftalign"> 6000 ps (166.667 <abbr title="Megahertz (million times per second)">MHz</abbr>)        </td>
+	</tr>
+	<tr class="row9">
+		<td class="col0 leftalign"> Output Driver Impedance Control               </td><td class="col1 leftalign"> RZQ/6                        </td>
+	</tr>
+	<tr class="row10">
+		<td class="col0 leftalign"> Controller Chip Select pin                    </td><td class="col1 leftalign"> Enabled                      </td>
+	</tr>
+	<tr class="row11">
+		<td class="col0 leftalign"> Rtt (nominal) – On-die termination            </td><td class="col1 leftalign"> RZQ/6                        </td>
+	</tr>
+	<tr class="row12">
+		<td class="col0 leftalign"> Internal Vref                                 </td><td class="col1 leftalign"> Enabled                      </td>
+	</tr>
+	<tr class="row13">
+		<td class="col0 leftalign"> Internal termination impedance                </td><td class="col1 leftalign"> 50 ohms                      </td>
+	</tr>
+</table></div>
+
+<p>
+The MIG Wizard will require the fixed pin-out of the memory signals to be entered and validated before generating the IP core. For your convenience, an importable UCF file is provided on the Arty A7 Resource Center to speed up this process. It is included in the “MIG Project” design resource download. This download also includes a .prj file that can be imported into the wizard to automatically configure it with the options found in Table 2. 
+</p>
+
+<p>
+For more details on the Xilinx MIG, refer to the 7 Series FPGAs Memory Interface Solutions User Guide (ug586).
+</p>
+
+</div>
+
+<h3 class="sectionedit20" id="quad-spi_flash">5.2 Quad-SPI Flash</h3>
+<div class="level3">
+
+<p>
+FPGA configuration files can be written to the Quad-SPI Flash, and setting the mode jumper will cause the FPGA to automatically read a configuration from this device at power on. An Artix-7 35T configuration file requires 17,536,096 bits of memory, leaving about 87% of the flash device (or ~14MB) available for user data. A common use for this extra memory is to store Microblaze programs too big to fit in the onboard Block memory (typically 128 KB). These programs are then loaded and executed using a smaller bootloader program that can fit in the block memory. It is possible to automatically generate this bootloader, roll it into a single file (called an .mcs file) that also contains the bitstream and your custom Microblaze application, and program this file into SPI Flash using Xilinx SDK and Vivado. Xilinx Answer Record 63605 explains how to do this.
+</p>
+
+<p>
+The contents of the memory can be manipulated by issuing certain commands on the SPI bus. The implementation of this protocol is outside the scope of this document. All signals in the SPI bus are general-purpose user I/O pins after FPGA configuration. On other boards, SCK is an exception because it remains a dedicated pin even after configuration, however, on the Arty A7 the SCK signal is routed to an additional general purpose pin that can be accessed after configuration (see Figure below). This allows access to this pin without having to instantiate the special FPGA primitive called STARTUPE2.
+</p>
+
+<p>
+Xilinx&#039;s AXI Quad SPI core can be used to read/write the flash in a Microblaze design. Refer to Xilinx&#039;s product guide for this core to learn more about using it, or to the manufacturer&#039;s datasheet to learn how to implement a custom controller.
+</p>
+
+<p>
+To find out the exact memory part loaded, check the PCB revision and any stickers placed on the PCB with the flash part number printed on it. The table below lists the possible load options.
+</p>
+<div class="table sectionedit21"><table class="inline">
+	<tr class="row0">
+		<th class="col0 leftalign"> Manufacturer ​      </th><th class="col1 leftalign"> P/N                       </th><td class="col2 leftalign"> PCB Revision ​                                            </td><td class="col3"> Package Marking ​ </td>
+	</tr>
+	<tr class="row1">
+		<td class="col0"> Micron            ​ </td><td class="col1 leftalign"> N25Q128A13ESF40           </td><td class="col2"> &lt;= C w/o sticker                                        ​ </td><td class="col3 leftalign"> N/A              </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0"> Spansion/​Infineon ​ </td><td class="col1"> S25FL128SAG[M|N]FI00 ​ </td><td class="col2"> &gt; C w/o sticker AND &lt;= E w/o sticker OR &gt;= E w/ sticker ​ </td><td class="col3 leftalign"> FL128SAIF00 ​     </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0"> Spansion/​Infineon ​ </td><td class="col1 leftalign"> S25FL127SABMFx00 ​         </td><td class="col2 leftalign"> &gt;= E w/ sticker ​                                         </td><td class="col3 leftalign"> FL127SxF00 ​      </td>
+	</tr>
+</table></div>
+
+<p>
+<em>Table 5.2.1 Flash memory part loaded</em>
+</p>
+
+<p>
+<strong>Note:</strong> <em>“mt25ql128” may be used as an alias for the Rev C&#039;s N25Q128A13ESF40 part in Vivado.</em>
+</p>
+
+<p>
+The two part numbers are highly compatible and the “​s25fl128s-3.3v-qspi-x4-single”​ part configuration can be used in Vivado Hardware Manager for both. However, the S25FL127S is not functionally equivalent to the S25FL128S and might require changes to customer applications (embedded software) depending on the board support package in use (<abbr title="Operating System">OS</abbr>, drivers, and libraries). It might be possible to implement any changes that might be needed in such a way to keep compatibility with all load options.
+A non-exhaustive list of the differences between the S25FL127S and the S25FL128S:
+</p>
+<ul>
+<li class="level1"><div class="li"> Read SFDP command (5Ah) is supported now. The Linux kernel driver is known to probe this command and use the SFDP feature to </div>
+</li>
+</ul>
+
+<p>
+dynamically initialize the flash device instead of relying on a static configuration if the command is available.
+</p>
+<ul>
+<li class="level1"><div class="li"> DDR Fast Read (0Dh, 0Eh), DDR Dual I/O Read (BDh, BEh), and Read DDR Quad I/O (EDh, EEh) not supported</div>
+</li>
+<li class="level1"><div class="li"> Memory organization:​ 255 64-KB and 16 4-KB bottom hybrid erase sectors vs. 254 64-KB and 32 4-KB bottom hybrid erase sectors</div>
+</li>
+<li class="level1"><div class="li"> Maximum clock frequency: 108 <abbr title="Megahertz (million times per second)">MHz</abbr> vs. 133MHz. Practically however, the system board limit is usually lower. The 50 <abbr title="Megahertz (million times per second)">MHz</abbr> read/write maximum frequency of the Arty A7 applies.</div>
+</li>
+</ul>
+
+<p>
+<strong>Note:</strong> <em>Refer to the manufacturer’s data sheets<sup><a href="#refnotes:3:note1" name="refnotes:3:ref1" class="refnotes-ref">1)</a></sup> ​ and Xilinx user guides<sup><a href="#refnotes:3:note2" name="refnotes:3:ref2" class="refnotes-ref">2)</a></sup> ​ for more information.</em>
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/arty/arty_spiflash.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="arty:arty_spiflash.png" rel="noopener"><img src="https://digilent.com/reference/_media/arty/arty_spiflash.png?w=400&amp;tok=c9b168" class="mediacenter" loading="lazy" title="Figure 5.2.1. Arty A7 SPI Flash." alt="Figure 5.2.1. Arty A7 SPI Flash." width="400" /></a>
+</p>
+
+<p>
+<em>Figure 5.2.1 Arty A7 SPI Flash</em>
+</p>
+<div class="refnotes">
+<hr>
+<div class="notes">
+<div class="note justify">
+<sup><b><a href="#refnotes:3:ref1" name="refnotes:3:note1" class="backref">1)</a></b></sup>
+<span id="refnotes:3:note1:text">
+<a href="https://www.infineon.com/dgdl/Infineon-S25FL128S_S25FL256S_128_Mb_(16_MB)_256_Mb_(32_MB)_3.0V_SPI_Flash_Memory-DataSheet-v18_00-EN.pdf?fileId=8ac78c8c7d0d8da4017d0ecfb6a64a17&amp;utm_source=cypress&amp;utm_medium=referral&amp;utm_campaign=202110_globe_en_all_integration-files" class="urlextern" target="_tab" title="https://www.infineon.com/dgdl/Infineon-S25FL128S_S25FL256S_128_Mb_(16_MB)_256_Mb_(32_MB)_3.0V_SPI_Flash_Memory-DataSheet-v18_00-EN.pdf?fileId=8ac78c8c7d0d8da4017d0ecfb6a64a17&amp;utm_source=cypress&amp;utm_medium=referral&amp;utm_campaign=202110_globe_en_all_integration-files" rel="ugc nofollow noopener">Spansion S25FL128S Datasheet</a>
+<a href="https://www.infineon.com/dgdl/Infineon-S25FL127S_128-Mb_(16_MB)_3.0_V_SPI_Flash_Memory-DataSheet-v11_00-EN.pdf?fileId=8ac78c8c7d0d8da4017d0ecfa58c49f7&amp;utm_source=cypress&amp;utm_medium=referral&amp;utm_campaign=202110_globe_en_all_integration-datasheet" class="urlextern" target="_tab" title="https://www.infineon.com/dgdl/Infineon-S25FL127S_128-Mb_(16_MB)_3.0_V_SPI_Flash_Memory-DataSheet-v11_00-EN.pdf?fileId=8ac78c8c7d0d8da4017d0ecfa58c49f7&amp;utm_source=cypress&amp;utm_medium=referral&amp;utm_campaign=202110_globe_en_all_integration-datasheet" rel="ugc nofollow noopener">Spansion S25FL127S Datasheet</a>
+</span></div>
+<div class="note justify">
+<sup><b><a href="#refnotes:3:ref2" name="refnotes:3:note2" class="backref">2)</a></b></sup>
+<span id="refnotes:3:note2:text">
+<a href="https://docs.xilinx.com/v/u/en-US/ug470_7Series_Config" class="urlextern" target="_tab" title="https://docs.xilinx.com/v/u/en-US/ug470_7Series_Config" rel="ugc nofollow noopener">7-Series FPGAs Configuration User Guide from Xilinx</a>
+</span></div>
+</div>
+</div>
+<hr />
+
+</div>
+
+<h2 class="sectionedit22" id="ethernet_phy">6 Ethernet PHY</h2>
+<div class="level2">
+
+<p>
+The Arty A7 includes a Texas Instruments 10/100 Ethernet PHY (TI part number DP83848J) paired with an RJ-45 Ethernet jack with integrated magnetics and indicator LEDs. The TI PHY uses the MII interface and supports 10/100 Mb/s. Figure 5 illustrates the pin connections between the Artix-7 and the Ethernet PHY. At power-on reset, the PHY is set to the following defaults:
+</p>
+<ul>
+<li class="level1"><div class="li"> MII mode interface</div>
+</li>
+<li class="level1"><div class="li"> Auto-negotiation enabled, advertising all 10/100 mode capable</div>
+</li>
+<li class="level1"><div class="li"> PHY address=00001</div>
+</li>
+<li class="level1"><div class="li"> <abbr title="Light Emitting Diode">LED</abbr> Mode 2</div>
+</li>
+</ul>
+
+<p>
+Two LEDs found in the Ethernet connector (J9) are connected to the PHY to provide link status and data activity feedback. See the PHY datasheet for details. Note that it is normal for one <abbr title="Light Emitting Diode">LED</abbr> to be illuminated and one to be off, even when not using the Ethernet PHY.
+</p>
+
+<p>
+Vivado IPI based designs can access the PHY using either the AXI EthernetLite IP core, the AXI 1G/2.5G Ethernet Subsystem IP core, or the Tri Mode Ethernet MAC IP core. A 25 <abbr title="Megahertz (million times per second)">MHz</abbr> clock needs to be generated for the X1 pin of the external PHY, labeled ETH_REF_CLK in the Arty A7 schematic. To learn how to properly use the Ethernet PHY in a Microblaze design on the Arty, refer to the Getting Started with Microblaze Servers tutorial on the Arty A7 Resource Center.
+</p>
+
+<p>
+For further information on the Ethernet PHY, refer to the DP83848J data sheet.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/arty/arty_eth.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="arty:arty_eth.png" rel="noopener"><img src="https://digilent.com/reference/_media/arty/arty_eth.png?w=400&amp;tok=0fbdf5" class="mediacenter" loading="lazy" title="Figure 6.1. Arty A7 Ethernet." alt="Figure 6.1. Arty A7 Ethernet." width="400" /></a>
+</p>
+
+<p>
+<em>Figure 6.1 Arty A7 Ethernet</em>
+</p>
+<hr />
+
+</div>
+
+<h2 class="sectionedit23" id="oscillatorsclocks">7 Oscillators/Clocks</h2>
+<div class="level2">
+
+<p>
+The Arty A7 includes a single 100 <abbr title="Megahertz (million times per second)">MHz</abbr> crystal oscillator connected to pin E3 (E3 is a MRCC input on bank 35). The input clock can drive MMCMs or PLLs to generate clocks of various frequencies and with known phase relationships that may be needed throughout a design. Some rules restrict which MMCMs and PLLs may be driven by the 100 <abbr title="Megahertz (million times per second)">MHz</abbr> input clock. For a full description of these rules and of the capabilities of the Artix-7 clocking resources, refer to the “7 Series FPGAs Clocking Resources User Guide” available from Xilinx.
+</p>
+
+<p>
+Xilinx offers the Clocking Wizard IP core to help users generate the different clocks required for a specific design. This wizard will properly instantiate the needed MMCMs and PLLs based on the desired frequencies and phase relationships specified by the user. The wizard will then output an easy-to-use wrapper component around these 
+clocking resources that can be inserted into the user’s design. The clocking wizard can be accessed from within the Project Navigator or Core Generator tools.
+</p>
+<hr />
+
+</div>
+
+<h2 class="sectionedit24" id="usb-uart_bridge_serial_port">8 USB-UART Bridge (Serial Port)</h2>
+<div class="level2">
+
+<p>
+The Arty A7 includes an FTDI FT2232HQ USB-UART bridge (attached to connector J10) that allows you use PC applications to communicate with the board using standard Windows COM port commands. Free USB-COM port drivers, available from <a href="http://www.ftdichip.com" class="urlextern" target="_tab" title="http://www.ftdichip.com" rel="ugc nofollow noopener">www.ftdichip.com</a> under the “Virtual Com Port” or VCP heading, convert USB packets to UART/serial port data. Serial port data is exchanged with the FPGA using a two-wire serial port (TXD/RXD). After the drivers are installed, I/O commands can be used from the PC directed to the COM port to produce serial data traffic on the A9 and D10 FPGA pins.
+</p>
+
+<p>
+Two on-board status LEDs provide visual feedback on traffic flowing through the port: the transmit <abbr title="Light Emitting Diode">LED</abbr> (LD10) and the receive <abbr title="Light Emitting Diode">LED</abbr> (LD9). Signal names that imply direction are from the point-of-view of the DTE (Data Terminal Equipment), in this case the PC.
+</p>
+
+<p>
+The FT2232HQ is also used as the controller for the Digilent USB-JTAG circuitry, but the USB-UART and USB-JTAG functions behave entirely independent of one another. Programmers interested in using the UART functionality of the FT2232 within their design do not need to worry about the JTAG circuitry interfering with the UART data transfers, and vice-versa. The combination of these two features into a single device allows the Arty A7 to be programmed, communicated with via UART, and powered from a computer attached with a single Micro USB cable. 
+</p>
+
+<p>
+The CK_RST signal (see the Arty A7 Schematic) is also connected to the FT2232HQ device via JP2. When JP2 is shorted, the FT2232HQ can trigger a Microblaze reset, mimicking the behavior of Arduino and chipKIT boards when sketches are loaded. Note the CK_RST signal is also connected to the red RESET button and the RST pin of J7 on the shield connector (these connections are not shown in the figure below).
+</p>
+
+<p>
+The connections between the FT2232HQ and the Artix-7 are shown in Figure 8.1.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/arty/arty_uart.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="arty:arty_uart.png" rel="noopener"><img src="https://digilent.com/reference/_media/arty/arty_uart.png?w=350&amp;tok=16e7e0" class="mediacenter" loading="lazy" title="Figure 8.1. Arty A7 UART." alt="Figure 8.1. Arty A7 UART." width="350" /></a>
+</p>
+
+<p>
+<em>Figure 8.1 Arty A7 UART</em>
+</p>
+<hr />
+
+</div>
+
+<h2 class="sectionedit25" id="basic_io">9 Basic I/O</h2>
+<div class="level2">
+
+<p>
+The Arty A7 includes four tri-color LEDs, 4 switches, 4 push buttons, 4 individual LEDs, and a reset button, as shown in Figure 16. The push buttons and slide switches are connected to the FPGA via series resistors to prevent damage from inadvertent short circuits (a short circuit could occur if an FPGA pin assigned to a push button or slide switch was inadvertently defined as an output). The four push buttons are “momentary” switches that normally generate a low output when they are at rest, and a high output only when they are pressed. Slide switches generate constant high or low inputs depending on their position.
+</p>
+
+<p>
+The red reset button labeled “RESET”  generates a high output when at rest and a low output when pressed. The RESET button is intended to be used in Microblaze designs to reset the processor, but you can also use it as a general purpose push button. Note that it is also tied to the RST pin on J7 of the shield connector and to the FT2232 UART device via JP2, though these connections are not shown in the figure below.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/arty/arty_gpio.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="arty:arty_gpio.png" rel="noopener"><img src="https://digilent.com/reference/_media/arty/arty_gpio.png?w=500&amp;tok=09f300" class="mediacenter" loading="lazy" title="Figure 9.1. Arty A7 GPIO." alt="Figure 9.1. Arty A7 GPIO." width="500" /></a>
+</p>
+
+<p>
+<em>Figure 9.1 Arty A7 <abbr title="General Purpose Input/Output">GPIO</abbr></em>
+</p>
+
+<p>
+The four individual high-efficiency LEDs are anode-connected to the FPGA via 330-ohm resistors, so they will turn on when a logic high voltage is applied to their respective I/O pin. Additional LEDs that are not user-accessible indicate power-on, FPGA programming status, and USB and Ethernet port status.
+</p>
+
+</div>
+
+<h3 class="sectionedit26" id="tri-color_leds">9.1 Tri-Color LEDs</h3>
+<div class="level3">
+
+<p>
+The Arty A7 contains four tri-color LEDs. Each tri-color <abbr title="Light Emitting Diode">LED</abbr> has three input signals that drive the cathodes of three smaller internal LEDs: one red, one blue, and one green. Driving the signal corresponding to one of these colors high will illuminate the internal <abbr title="Light Emitting Diode">LED</abbr>. The input signals are driven by the FPGA through a transistor, which inverts the signals. Therefore, to light up the tri-color <abbr title="Light Emitting Diode">LED</abbr>, the corresponding signals need to be driven high. The tri-color <abbr title="Light Emitting Diode">LED</abbr> will emit a color dependent on the combination of internal LEDs that are currently being illuminated. For example, if the red and blue signals are driven high and green is driven low, the tri-color <abbr title="Light Emitting Diode">LED</abbr> will emit a purple color.
+</p>
+
+<p>
+Note: Digilent strongly recommends the use of pulse-width modulation (PWM) when driving the tri-color LEDs. Driving any of the inputs to a steady logic ‘1’ will result in the <abbr title="Light Emitting Diode">LED</abbr> being illuminated at an uncomfortably bright level. You can avoid this by ensuring that none of the tri-color signals are driven with more than a 50% duty cycle. Using PWM also greatly expands the potential color palette of the tri-color led. Individually adjusting the duty cycle of each color between 50% and 0% causes the different colors to be illuminated at different intensities, allowing virtually any color to be displayed.
+</p>
+<hr />
+
+</div>
+
+<h2 class="sectionedit27" id="pmod_connectors">10 Pmod Connectors</h2>
+<div class="level2">
+
+<p>
+Pmod connectors are 2&times;6, right-angle, 100-mil spaced female connectors that mate with standard 2&times;6 pin headers. Each 12-pin Pmod connector provides two 3.3V <abbr title="Positive Voltage Supply">VCC</abbr> signals (pins 6 and 12), two Ground signals (pins 5 and 11), and eight logic signals, as shown in Fig. 16. The <abbr title="Positive Voltage Supply">VCC</abbr> and Ground pins can deliver up to 1A of current, but care must be taken not to exceed any of the power budgets of the onboard regulators or the external power supply (these are described in the “Power supplies” section). 
+</p>
+
+<p>
+<strong>Warning:</strong> <em>Since the Pmod pins are connected to Artix-7 FPGA pins using a 3.3V logic standard, care should be taken not to drive these pins over 3.4V.</em>
+</p>
+
+<p>
+Digilent produces a large collection of Pmod accessory boards that can attach to the Pmod expansion connectors to add ready-made functions like A/D’s, D/A’s, motor drivers, sensors, and other functions. See <a href="http://www.digilentinc.com" class="urlextern" target="_tab" title="http://www.digilentinc.com" rel="ugc nofollow noopener">www.digilentinc.com</a> for more information.
+</p>
+
+<p>
+The Arty A7 has four Pmod connectors, some of which behave differently than others. Each Pmod connector falls into one of two categories: standard or high-speed. Table 4 specifies which category each Pmod falls into, and also lists the FPGA pins they are connected to. The following sections describe the different types of Pmods.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_detail/basys3-pmod_connector.png?id=programmable-logic%3Aarty-a7%3Areference-manual" class="media" target="_tab " title="basys3-pmod_connector.png" rel="noopener"><img src="https://digilent.com/reference/_media/basys3-pmod_connector.png?w=350&amp;tok=20c9fc" class="mediacenter" loading="lazy" title="Figure 10.1. Pmod connector." alt="Figure 10.1. Pmod connector." width="350" /></a>
+</p>
+<div class="table sectionedit28"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<td class="col0 leftalign">                </td><th class="col1 leftalign"> <strong>Pmod JA </strong>  </th><th class="col2 leftalign"> <strong>Pmod JB</strong>     </th><th class="col3 leftalign"> <strong>Pmod JC</strong>     </th><th class="col4 leftalign"> <strong>Pmod JD</strong>   </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<th class="col0 leftalign"> <strong>Pmod Type</strong>  </th><td class="col1 leftalign"> <strong>Standard</strong>  </td><td class="col2 leftalign"> <strong>High-Speed</strong>  </td><td class="col3 leftalign"> <strong>High-Speed</strong>  </td><td class="col4 leftalign"> <strong>Standard</strong>  </td>
+	</tr>
+	<tr class="row2">
+		<th class="col0 leftalign"> <strong>Pin 1</strong>      </th><td class="col1 leftalign"> G13           </td><td class="col2 leftalign"> E15             </td><td class="col3 leftalign"> U12             </td><td class="col4 leftalign"> D4            </td>
+	</tr>
+	<tr class="row3">
+		<th class="col0 leftalign"> <strong>Pin 2</strong>      </th><td class="col1 leftalign"> B11           </td><td class="col2 leftalign"> E16             </td><td class="col3 leftalign"> V12             </td><td class="col4 leftalign"> D3            </td>
+	</tr>
+	<tr class="row4">
+		<th class="col0 leftalign"> <strong>Pin 3</strong>      </th><td class="col1 leftalign"> A11           </td><td class="col2 leftalign"> D15             </td><td class="col3 leftalign"> V10             </td><td class="col4 leftalign"> F4            </td>
+	</tr>
+	<tr class="row5">
+		<th class="col0 leftalign"> <strong>Pin 4</strong>      </th><td class="col1 leftalign"> D12           </td><td class="col2 leftalign"> C15             </td><td class="col3 leftalign"> V11             </td><td class="col4 leftalign"> F3            </td>
+	</tr>
+	<tr class="row6">
+		<th class="col0 leftalign"> <strong>Pin 7</strong>      </th><td class="col1 leftalign"> D13           </td><td class="col2 leftalign"> J17             </td><td class="col3 leftalign"> U14             </td><td class="col4 leftalign"> E2            </td>
+	</tr>
+	<tr class="row7">
+		<th class="col0 leftalign"> <strong>Pin 8</strong>      </th><td class="col1 leftalign"> B18           </td><td class="col2 leftalign"> J18             </td><td class="col3 leftalign"> V14             </td><td class="col4 leftalign"> D2            </td>
+	</tr>
+	<tr class="row8">
+		<th class="col0 leftalign"> <strong>Pin 9</strong>      </th><td class="col1 leftalign"> A18           </td><td class="col2 leftalign"> K15             </td><td class="col3 leftalign"> T13             </td><td class="col4 leftalign"> H2            </td>
+	</tr>
+	<tr class="row9">
+		<th class="col0 leftalign"> <strong>Pin 10</strong>     </th><td class="col1 leftalign"> K16           </td><td class="col2 leftalign"> J15             </td><td class="col3 leftalign"> U13             </td><td class="col4 leftalign"> G2            </td>
+	</tr>
+</table></div>
+
+</div>
+
+<h2 class="sectionedit29" id="standard_pmod">10.1 Standard Pmod</h2>
+<div class="level2">
+
+<p>
+The standard Pmod connectors are connected to the FPGA via 200 Ohm series resistors. The series resistors prevent short circuits that can occur if the user accidentally drives a signal that is supposed to be used as an input. The downside to this added protection is that these resistors can limit the maximum switching speed of the data signals. If the Pmod being used does not require high-speed access, then the standard Pmod connector should be used to help prevent damage to the devices.
+</p>
+
+</div>
+
+<h2 class="sectionedit30" id="high-speed_pmod">10.2 High-Speed Pmod</h2>
+<div class="level2">
+
+<p>
+The High-speed Pmods use the standard Pmod connector, but have their data signals routed as impedance matched differential pairs for maximum switching speeds. They have pads for loading resistors for added protection, but the Arty A7 ships with these loaded as 0-Ohm shunts. With the series resistors shunted, these Pmods offer no protection against short circuits, but allow for much faster switching speeds. The signals are paired to the adjacent signals in the same row: pins 1 and 2, pins 3 and 4, pins 7 and 8, and pins 9 and 10. 
+</p>
+
+<p>
+Traces are routed 100 ohm (+/- 10%) differential.
+</p>
+
+<p>
+These connectors should be used only when high speed differential signaling is required or the other Pmods are all occupied. If used as single-ended, coupled pairs may have significant crosstalk. In applications where this is a concern, the standard Pmod connector shall be used. Another option would be to ground one of the signals (drive it low from the FPGA) and use its pair for the signal-ended signal.
+</p>
+
+<p>
+Since the High-Speed Pmods have 0-ohm shunts instead of protection resistors, the operator must take precaution to ensure that they do not cause any shorts.
+</p>
+<hr />
+
+</div>
+
+<h2 class="sectionedit31" id="arduinochipkit_shield_connector">11 Arduino/chipKIT Shield Connector</h2>
+<div class="level2">
+
+<p>
+The Arty A7 can be connected to standard Arduino and chipKIT shields to add extended functionality. Special care was taken while designing the Arty to make sure it is compatible with the majority of Arduino and chipKIT shields on the market. The shield connector has 49 pins connected to the FPGA for general purpose Digital I/O. Due to the flexibility of FPGAs, it is possible to use these pins for just about anything including digital read/write, SPI connections, UART connections, I2C connections, and PWM. Six of these pins (labeled AN0-AN5) can also be used as single-ended analog inputs with an input range of 0V-3.3V, and another six (labeled AN6-11) can be used as differential analog inputs.
+</p>
+
+<p>
+<strong>Warning:</strong> <em>The Arty A7 is not compatible with shields that output 5V digital or analog signals. Driving pins on the shield connector above 3.4V may cause damage to the FPGA.</em>
+</p>
+
+<p>
+Figure 11.1 diagrams the pins found on the shield connector of the Arty A7.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_media/arty/arty_shield_pins.png" class="media" target="_tab " title="arty:arty_shield_pins.png" rel="noopener"><img src="https://digilent.com/reference/_media/arty/arty_shield_pins.png?w=600&amp;tok=a54aae" class="mediacenter" loading="lazy" title="Figure 11.1. Arty A7 Shield Connector Pin Diagram." alt="Figure 11.1. Arty A7 Shield Connector Pin Diagram." width="600" /></a>
+</p>
+
+<p>
+<em>Figure 11.1 Arty A7 Shield Connector Pin Diagram</em>
+</p>
+<div class="table sectionedit32"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0 leftalign"> Pin Name                                           </th><th class="col1 leftalign"> Shield Function                      </th><th class="col2 leftalign"> Arty A7 Connection                                                                                                                                             </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<td class="col0 leftalign"> <strong>IO0</strong>-<strong>IO13</strong>, <strong>IO26</strong>-<strong>IO41</strong>, <strong>A (IO42)</strong>  </td><td class="col1 leftalign"> General purpose I/O pins             </td><td class="col2 leftalign"> See Section titled “Shield Digital I/O”                                                                                                                        </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0 leftalign"> <strong>SCL</strong>                                            </td><td class="col1 leftalign"> I2C Clock                            </td><td class="col2 leftalign"> See Section titled “Shield Digital I/O”                                                                                                                        </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0 leftalign"> <strong>SDA</strong>                                            </td><td class="col1 leftalign"> I2C Data                             </td><td class="col2 leftalign"> See Section titled “Shield Digital I/O”                                                                                                                        </td>
+	</tr>
+	<tr class="row4">
+		<td class="col0 leftalign"> <strong><abbr title="SPI Clock">SCLK</abbr></strong>                                           </td><td class="col1 leftalign"> SPI Clock                            </td><td class="col2 leftalign"> See Section titled “Shield Digital I/O”                                                                                                                        </td>
+	</tr>
+	<tr class="row5">
+		<td class="col0 leftalign"> <strong><abbr title="Master Out Slave In">MOSI</abbr></strong>                                           </td><td class="col1 leftalign"> SPI Data out                         </td><td class="col2 leftalign"> See Section titled “Shield Digital I/O”                                                                                                                        </td>
+	</tr>
+	<tr class="row6">
+		<td class="col0 leftalign"> <strong><abbr title="Master In Slave Out">MISO</abbr></strong>                                           </td><td class="col1 leftalign"> SPI Data in                          </td><td class="col2 leftalign"> See Section titled “Shield Digital I/O”                                                                                                                        </td>
+	</tr>
+	<tr class="row7">
+		<td class="col0 leftalign"> <strong>SS</strong>                                             </td><td class="col1 leftalign"> SPI Slave Select                     </td><td class="col2 leftalign"> See Section titled “Shield Digital I/O”                                                                                                                        </td>
+	</tr>
+	<tr class="row8">
+		<td class="col0 leftalign"> <strong>A0</strong>-<strong>A5</strong>                                      </td><td class="col1 leftalign"> Single-Ended Analog Input            </td><td class="col2 leftalign"> See Section titled “Shield Analog I/O”                                                                                                                         </td>
+	</tr>
+	<tr class="row9">
+		<td class="col0 leftalign"> <strong>A6</strong>-<strong>A11</strong>                                     </td><td class="col1 leftalign"> Differential Analog Input            </td><td class="col2 leftalign"> See Section titled “Shield Analog I/O”                                                                                                                         </td>
+	</tr>
+	<tr class="row10">
+		<td class="col0 leftalign"> <strong>V_P</strong>, <strong>V_N</strong>                                   </td><td class="col1 leftalign"> Dedicated Differential Analog Input  </td><td class="col2 leftalign"> See Section titled “Shield Analog I/O”                                                                                                                         </td>
+	</tr>
+	<tr class="row11">
+		<td class="col0 leftalign"> <strong>XGND</strong>                                           </td><td class="col1 leftalign"> XADC Analog Ground                   </td><td class="col2 leftalign"> Connected to net used to drive the XADC ground reference on the FPGA (VREFN)                                                                                   </td>
+	</tr>
+	<tr class="row12">
+		<td class="col0 leftalign"> <strong>XVREF</strong>                                          </td><td class="col1 leftalign"> XADC Analog Voltage Reference        </td><td class="col2 leftalign"> Connected to 1.25 V, 25 mA rail used to drive the XADC voltage reference on the FPGA (VREFP)                                                                   </td>
+	</tr>
+	<tr class="row13">
+		<td class="col0 leftalign"> <strong><em>N/C</em></strong>                                        </td><td class="col1 leftalign"> Not Connected                        </td><td class="col2 leftalign"> Not Connected                                                                                                                                                  </td>
+	</tr>
+	<tr class="row14">
+		<td class="col0 leftalign"> <strong>IOREF</strong>                                          </td><td class="col1 leftalign"> Digital I/O Voltage reference        </td><td class="col2 leftalign"> Connected to the 3.3 V Power Rail (See the “Power Supplies” section)                                                                                           </td>
+	</tr>
+	<tr class="row15">
+		<td class="col0 leftalign"> <strong>RST</strong>                                            </td><td class="col1 leftalign"> Reset to Shield                      </td><td class="col2 leftalign"> Connected to the red “RESET” button and a Digital I/O of the FPGA. When JP2 is shorted, it is also connected to the DTR signal of the FTDI USB-UART bridge.    </td>
+	</tr>
+	<tr class="row16">
+		<td class="col0 leftalign"> <strong>3V3</strong>                                            </td><td class="col1 leftalign"> 3.3 V Power Rail                     </td><td class="col2 leftalign"> Connected to the 3.3 V Power Rail (See the “Power Supplies” section)                                                                                           </td>
+	</tr>
+	<tr class="row17">
+		<td class="col0 leftalign"> <strong>5V0</strong>                                            </td><td class="col1 leftalign"> 5.0 V Power Rail                     </td><td class="col2 leftalign"> Connected to the 5.0 V Power Rail (See the “Power Supplies” section)                                                                                           </td>
+	</tr>
+	<tr class="row18">
+		<td class="col0 leftalign"> <strong><abbr title="Ground">GND</abbr></strong>, <strong>G</strong>                                     </td><td class="col1 leftalign"> Ground                               </td><td class="col2 leftalign"> Connected to the ground plane                                                                                                                                  </td>
+	</tr>
+	<tr class="row19">
+		<td class="col0 leftalign"> <strong>VIN</strong>                                            </td><td class="col1 leftalign"> Power Input                          </td><td class="col2 leftalign"> Connected in parallel with the external power supply connector (J13). See the “Power Supplies” section for information on powering the Arty A7 from this pin.  </td>
+	</tr>
+</table></div>
+
+</div>
+
+<h3 class="sectionedit33" id="shield_digital_io">11.1 Shield Digital I/O</h3>
+<div class="level3">
+
+<p>
+The pins connected directly to the FPGA can be used as general purpose inputs or outputs. These pins include the I2C, SPI, and general purpose I/O pins. There are 200 Ohm series resistors between the FPGA and the digital I/O pins to help provide protection against accidental short circuits. The absolute maximum and recommended operating voltages for these pins are outlined in the table below.
+</p>
+<div class="table sectionedit34"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0 leftalign">                         </th><th class="col1 leftalign"> Absolute Minimum Voltage  </th><th class="col2 leftalign"> Recommended Minimum Operating Voltage  </th><th class="col3 leftalign"> Recommended Maximum Operating Voltage  </th><th class="col4 leftalign"> Absolute Maximum Voltage  </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<th class="col0 leftalign"> Powered                 </th><td class="col1 leftalign"> -0.4 V                    </td><td class="col2 leftalign"> -0.2 V                                 </td><td class="col3 leftalign"> 3.4 V                                  </td><td class="col4 leftalign"> 3.75 V                    </td>
+	</tr>
+	<tr class="row2">
+		<th class="col0 leftalign"> Unpowered               </th><td class="col1 leftalign"> -0.4 V                    </td><td class="col2 leftalign"> N/A                                    </td><td class="col3 leftalign"> N/A                                    </td><td class="col4 leftalign"> 0.55 V                    </td>
+	</tr>
+</table></div>
+
+<p>
+For more information on the electrical characteristics of the pins connected to the FPGA, please see the <a href="https://docs.xilinx.com/v/u/en-US/ds181_Artix_7_Data_Sheet" class="urlextern" target="_tab" title="https://docs.xilinx.com/v/u/en-US/ds181_Artix_7_Data_Sheet" rel="ugc nofollow noopener">Artix-7 datasheet</a> from Xilinx.
+</p>
+
+</div>
+
+<h3 class="sectionedit35" id="shield_analog_io">11.2 Shield Analog I/O</h3>
+<div class="level3">
+
+<p>
+The pins labeled A0-A11 and V_P/V_N are used as analog inputs to the XADC module of the FPGA. The FPGA expects that the inputs range from 0-1 V. On the pins labeled A0-A5 we use an external circuit to scale down the input voltage from 3.3V. This circuit is shown in Figure 11.2.1. This circuit allows the XADC module to accurately measure any voltage between 0V and 3.3V (relative to the Arty A7&#039;s <abbr title="Ground">GND</abbr>) that is applied to any of these pins. If you wish to use the pins labeled A0-A5 as Digital inputs or outputs, they are also connected directly to the FPGA before the resistor divider circuit (also shown in Figure 11.2.1).
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_media/reference/programmable-logic/arty/arty_shield_analog_diff.png" class="media" target="_tab " title="reference:programmable-logic:arty:arty_shield_analog_diff.png" rel="noopener"><img src="https://digilent.com/reference/_media/reference/programmable-logic/arty/arty_shield_analog_diff.png?w=600&amp;tok=8c361e" class="mediacenter" loading="lazy" title="Figure 11.2.1. Arty A7 Single-Ended Analog Inputs" alt="Figure 11.2.1. Arty A7 Single-Ended Analog Inputs" width="600" /></a>
+</p>
+
+<p>
+<em>Figure 11.2.1 Arty A7 Single-Ended Analog Inputs</em>
+</p>
+<hr />
+
+<p>
+The pins labeled A6-A11 are connected directly to 3 pairs of analog capable pins on the FPGA via an anti-aliasing filter. This circuit is shown in Figure 11.2.2. These pairs of pins can be used as differential analog inputs with a voltage difference between 0-1V. The even numbers are connected to the positive pins of the pair and the odd numbers are connected to the negative pins (so A6 and A7 form an analog input pair with A6 being positive and A7 being negative). Note that though the pads for the capacitor are present, they are not loaded for these pins. Since the analog capable pins of the FPGA can also be used like normal digital FPGA pins, it is also possible to use these pins for Digital I/O. 
+</p>
+
+<p>
+The pins labeled V_P and V_N are connected to the VP_0 and VN_0 dedicated analog inputs of the FPGA. This pair of pins can also be used as a differential analog input with voltage between 0-1V, but they cannot be used as Digital I/O. The capacitor in the circuit shown in Figure 11.2.2 for this pair of pins is loaded on the Arty.
+</p>
+
+<p>
+<a href="https://digilent.com/reference/_media/reference/programmable-logic/arty/arty_shield_analog_single.png" class="media" target="_tab " title="reference:programmable-logic:arty:arty_shield_analog_single.png" rel="noopener"><img src="https://digilent.com/reference/_media/reference/programmable-logic/arty/arty_shield_analog_single.png?w=600&amp;tok=cb338a" class="mediacenter" loading="lazy" title="Figure 11.2.2. Arty A7 Differential Analog Inputs" alt="Figure 11.2.2. Arty A7 Differential Analog Inputs" width="600" /></a>
+</p>
+
+<p>
+<em>Figure 11.2.2 Arty A7 Differential Analog Inputs</em>
+</p>
+
+<p>
+The XADC core within the Artix-7 is a dual channel 12-bit analog-to-digital converter capable of operating at 1 MSPS. Either channel can be driven by any of the analog inputs connected to the shield pins. The XADC core is controlled and accessed from a user design via the Dynamic Reconfiguration Port (DRP). The DRP also provides access to voltage monitors that are present on each of the FPGA’s power rails, and a temperature sensor that is internal to the FPGA. For more information on using the XADC core, refer to the Xilinx document titled 7 Series FPGAs and Zynq-7000 All Programmable SoC XADC Dual 12-Bit 1 MSPS Analog-to-Digital Converter. A demo that uses the XADC core is available on the Arty A7 Resource Center.  
+</p>
+<hr />
+
+<p>
+The shield analog I/O pins are mapped to XADC channels as described in Table 11.2.1. Take a look at the master XDC file found in the <a href="https://github.com/Digilent/digilent-xdc" class="urlextern" target="_tab" title="https://github.com/Digilent/digilent-xdc" rel="ugc nofollow noopener">digilent-xdc</a> repository on Github for more information, including location contraints to be used when constraining the dual-use analog/digital pins in either mode.
+</p>
+
+<p>
+When using Xilinx&#039;s XADC wizard, make sure you&#039;re using the XADC channel instead of the pin number. For example, pin A0 connects vaux4_p/vaux4_n.
+</p>
+
+<p>
+<em>Table 11.2.1 XADC Channel Connections</em>
+</p>
+<div class="table sectionedit36"><table class="inline" style="min-width: 0px; width: 70%;">
+<col style="width: 40%" /><col style="width: 30%" /><col style="width: 30%" />
+	<thead>
+	<tr class="row0">
+		<th class="col0 leftalign"> Shield Connector Pin  </th><th class="col1 leftalign"> XADC Channel             </th><th class="col2 leftalign"> Channel Type  </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<td class="col0 leftalign"> V_P(+) / V_N(-)       </td><td class="col1 leftalign"> Dedicated Analog Inputs  </td><td class="col2 leftalign"> Differential  </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0 leftalign"> A0                    </td><td class="col1 leftalign"> Channel 4                </td><td class="col2 leftalign"> Single-ended  </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0 leftalign"> A1                    </td><td class="col1 leftalign"> Channel 5                </td><td class="col2 leftalign"> Single-ended  </td>
+	</tr>
+	<tr class="row4">
+		<td class="col0 leftalign"> A2                    </td><td class="col1 leftalign"> Channel 6                </td><td class="col2 leftalign"> Single-ended  </td>
+	</tr>
+	<tr class="row5">
+		<td class="col0 leftalign"> A3                    </td><td class="col1 leftalign"> Channel 7                </td><td class="col2 leftalign"> Single-ended  </td>
+	</tr>
+	<tr class="row6">
+		<td class="col0 leftalign"> A4                    </td><td class="col1 leftalign"> Channel 15               </td><td class="col2 leftalign"> Single-ended  </td>
+	</tr>
+	<tr class="row7">
+		<td class="col0 leftalign"> A5                    </td><td class="col1 leftalign"> Channel 0                </td><td class="col2 leftalign"> Single-ended  </td>
+	</tr>
+	<tr class="row8">
+		<td class="col0 leftalign"> A6(+) / A7(-)         </td><td class="col1 leftalign"> Channel 12               </td><td class="col2 leftalign"> Differential  </td>
+	</tr>
+	<tr class="row9">
+		<td class="col0 leftalign"> A8(+) / A9(-)         </td><td class="col1 leftalign"> Channel 13               </td><td class="col2 leftalign"> Differential  </td>
+	</tr>
+	<tr class="row10">
+		<td class="col0 leftalign"> A10(+) / A11(-)       </td><td class="col1 leftalign"> Channel 14               </td><td class="col2 leftalign"> Differential  </td>
+	</tr>
+</table></div>
+<div class="tags"><span>
+	<a href="https://digilent.com/reference/tag/rm?do=showtag&amp;tag=rm" class="wikilink1" title="tag:rm" rel="tag">rm</a>,
+	<a href="https://digilent.com/reference/tag/doc?do=showtag&amp;tag=doc" class="wikilink1" title="tag:doc" rel="tag">doc</a>,
+	<a href="https://digilent.com/reference/tag/arty-a7?do=showtag&amp;tag=arty-a7" class="wikilink1" title="tag:arty-a7" rel="tag">arty-a7</a>
+</span></div>
+
+</div>
+
+                    <!-- wikipage stop -->
+                    </div>
+
+                    					
+					
+                </div><!-- /content -->
+
+                <!-- ********** ASIDE ********** -->
+                                <aside id="dokuwiki__aside" class="col-sm-3 col-sm-pull-9">
+                                    </aside><!-- /aside -->
+                            </section><!-- /wrapper -->
+
+            <!-- ********** FOOTER ********** -->            
+			
+    </div></div><!-- /site -->
+	<div class="container-fluid footer">
+        <div class="container">
+            <div class="row footer-links">
+
+                <div class="footer-info-col col-xs-12 col-sm-6 col-md-2">
+                    <h5 class="footer-info-heading">
+                        <a href="https://digilent.com/company/">Company</a>
+                    </h5>
+                    <ul >
+                        <li>
+                            <a href="https://digilent.com/company/#about-digilent">About Us</a>
+                        </li>
+                        <li>
+                            <a href="https://digilent.com/company/#faqs">FAQs</a>
+                        </li>  
+                        <li>
+                            <a href="https://digilent.com/shop/distributors/">Distributors</a>
+                        </li> 
+                        <li>
+                            <a href="https://digilent.com/shipping-returns/">Shipping & Returns</a>
+                        </li>
+                        <li>
+                            <a href="https://digilent.com/company/#jobs">Jobs</a>
+                        </li>
+                        <li>
+                            <a href="https://digilent.com/legal-privacy/">Legal & Privacy</a>
+                        </li>                                             
+                    </ul>
+                </div>
+
+                <div class="footer-info-col col-xs-12 col-sm-6 col-md-2">
+                    <h5 class="footer-info-heading">
+                        <a href="https://digilent.com/news/">News</a>
+                    </h5>
+                    <ul >
+                        <li>
+                            <a href="https://digilent.com/blog/">Blog</a>
+                        </li>
+                        <li>
+                            <a href="https://digilent.com/news/#newsletter">Newsletter</a>
+                        </li>
+                        <li>
+                            <a href="https://digilent.com/news/#events">Events</a>
+                        </li>
+                    </ul>
+                </div>
+
+                <!--<div class="footer-info-col col-xs-12 col-sm-6 col-md-2">
+                    <h5 class="footer-info-heading">
+                        <a href="https://digilent.com/affiliations/">Affiliations</a>
+                    </h5>
+                    <ul >
+                        <li>
+                            <a href="https://digilent.com/affiliations/#distributors">List of Distributors</a>
+                        </li>
+                        <li>
+                            <a href="https://digilent.com/affiliations/#partners">Technology Partners</a>
+                        </li>
+                    </ul>
+                </div>-->
+
+                <div class="footer-info-col col-xs-12 col-sm-6 col-md-4">
+                    <h5 class="footer-info-heading">Subscribe to our newsletter</h5>
+                    <p>Get the latest updates on new products and upcoming sales</p>
+
+                    <div class="_form_9"></div><script src="https://ac.digilent.com/f/embed.php?id=9" type="text/javascript" charset="utf-8"></script>
+                </div>
+
+                <div class="footer-info-col col-xs-12 col-sm-6 col-md-2 col-md-offset-1">
+                    <h5 class="footer-info-heading">Contact Us</h5>
+                    <ul id="contact-us-links">
+                    <li>
+                            <a href="https://forum.digilent.com">Technical Support Forum</a>
+                        </li>                        
+                        <li>
+                            <a href="https://digilent.com/support/#channels">Support Channels</a>
+                        </li>
+                    </ul>
+                    <address>
+                        Digilent co NI<br>
+                        attn: PBU Operations<br>
+                        11500 N Mopac Expy,<br>
+                        Austin, TX 78759<br>
+                        United States of America
+                    </address>
+                </div>
+
+                <div class="footer-info-col col-xs-12 social">
+                <div class="col-lg-pull-11 col-md-pull-10 col-sm-pull-10 col-xs-12 copyright">© 2025 Digilent</div>
+                    <ul class="socialLinks">
+
+                        <li class="socialLinks-item">
+                            <a href="http://twitter.com/DigilentInc" target="_blank" rel="noopener">
+                                <i class="fa fa-twitter"></i>
+                            </a>
+                        </li>
+                        <li class="socialLinks-item">
+                            <a href="http://facebook.com/Digilent" target="_blank" rel="noopener">
+                                <i class="fa fa-facebook"></i>
+                            </a>
+                        </li>
+                        <li class="socialLinks-item">
+                            <a href="https://www.youtube.com/user/DigilentInc" target="_blank" rel="noopener">
+                                <i class="fa fa-youtube"></i>
+                            </a>
+                        </li>
+                        <li class="socialLinks-item">
+                            <a href="https://github.com/digilent" target="_blank" rel="noopener">
+                                <i class="fa fa-github"></i>
+                            </a>
+                        </li>
+                        <li class="socialLinks-item">
+                            <a href="https://instagram.com/digilentinc" target="_blank" rel="noopener">
+                                <i class="fa fa-instagram"></i>
+                            </a>
+                        </li>
+                        <li class="socialLinks-item">
+                            <a href="https://www.linkedin.com/company/1454013" target="_blank" rel="noopener">
+                                <i class="fa fa-linkedin"></i>
+                            </a>
+                        </li>
+                        <li class="socialLinks-item">
+                            <a href="https://www.flickr.com/photos/127815101@N07" target="_blank" rel="noopener">
+                                <i class="fa fa-flickr"></i>
+                            </a>
+                        </li>
+                    </ul>
+                </div> 
+            </div>
+        </div>
+	</div>
+
+    <div class="no"><img src="https://digilent.com/reference/lib/exe/taskrunner.php?id=programmable-logic%3Aarty-a7%3Areference-manual&amp;1778983654" width="2" height="1" alt="" /></div>
+    <!--[if ( IE 6 | IE 7 | IE 8 ) ]></div><![endif]-->
+
+    <script src="https://digilent.com/reference/lib/tpl/digilent-tpl/js/jquery-1.9.1.min.js" type="text/javascript"></script>
+<script type="text/javascript">
+    var jQNew = $.noConflict(true);
+</script>
+<script src="https://digilent.com/reference/lib/tpl/digilent-tpl/js/bootstrap.min.js" type="text/javascript"></script>
+<script src="https://digilent.com/reference/lib/tpl/digilent-tpl/js/sorttable.js" type="text/javascript"></script>
+<script src="https://digilent.com/reference/lib/tpl/digilent-tpl/js/script.js" type="text/javascript"></script>
+
+    <!-- Lucky Orange -->
+    <script type='text/javascript'>
+    window.__lo_site_id = 287347;
+	(function() {
+		var wa = document.createElement('script'); wa.type = 'text/javascript'; wa.async = true;
+		wa.src = 'https://d10lpsik1i8c69.cloudfront.net/w.js';
+		var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(wa, s);
+	  })();
+	</script>
+
+</body>
+</html>
+
+
+
