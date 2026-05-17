@@ -83,6 +83,14 @@ SX1257 register writes used during operation:
 - `RegRxAnaGain` (0x0C) — AGC gain setting
 - `RegTxGain` (0x08) — TX DAC and mixer gain
 
+Reference-clock note for SX1257 register programming:
+
+- the planned board reference is `32 MHz`, not `36 MHz`
+- this is not a separate SX1257 PLL mode bit; the PLL uses whatever reference is physically driven into `XTB`
+- frequency-programming words written into `RegFrfRxMsb/Mid/Lsb` and `RegFrfTxMsb/Mid/Lsb` must therefore be calculated for `F_XOSC = 32 MHz`
+- `RegRxBw[4:2]` (`RxAdcTrim`) must be set for the `32 MHz` reference case: `110` for `32 MHz`, not the `36 MHz` setting `101`
+- when using the shared external TCXO on `XTB`, `XTA` is left open and the `XTB` input amplitude must remain within the datasheet limit (`1.8 Vpp` max)
+
 ---
 
 ## Pass-through mode
@@ -106,6 +114,8 @@ SX_CTRL.RNW = 1  -> SX1257 WNR = 0   // read
 `CS_A[1:0]` is driven from `SX_TARGET[1:0]` (bits [3:2] ignored). `BUSY` is asserted from transaction launch until the final SCK edge and chip-select release. On a read transaction, `SX_DATA` is overwritten with the returned MISO byte when the transaction completes. Firmware and host software must not initiate a new transaction while `BUSY` is high.
 
 See [Register Map](../Register%20Map.md) `0xB5`–`0xB8` for the full protocol and typical init register list.
+
+For clarity during bring-up, any documented SX1257 init script should explicitly note that the system reference is `32 MHz`. Do not reuse `36 MHz` FRF constants or `36 MHz` `RxAdcTrim` values from older examples without recomputing them.
 
 Programmer-visible sequence:
 

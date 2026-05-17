@@ -570,6 +570,13 @@ Read sequence:
 
 Arbitration: when PicoRV32 is running, firmware must poll `SX_CTRL[2]` before issuing any SPI-master transaction. The host should issue pass-through commands only during a known idle window, typically before releasing `CPU_RESET` or after asserting `CPU_RESET=1` again.
 
+Reference-clock note for SX1257 register writes:
+
+- the current board plan uses a shared `32 MHz` reference on `XTB`
+- there is no separate SX1257 PLL register bit to declare `32 MHz`; instead, all SX1257 frequency words must be computed for `F_XOSC = 32 MHz`
+- any `RegFrfRx*` / `RegFrfTx*` values copied from `36 MHz` examples must be recomputed
+- `RegRxBw[4:2]` (`RxAdcTrim`) must use the `32 MHz` setting `110` rather than the `36 MHz` setting `101`
+
 ### `0xC0`–`0xC9` — SC Bring-Up Debug (read-only)
 
 Optional Schmidl-Cox debug visibility intended primarily for FPGA and first-silicon bring-up.
