@@ -13,7 +13,7 @@ Converts the complex channel estimates `Z_j` from the training accumulator into 
 
 Two parallel paths produce weights:
 
-- **Hardware path** — a hardened RTL state machine (FSM + CORDIC + reciprocal) that computes EGC or MRC weights from `Z_j` with deterministic latency. Enables same-packet weight application.
+- **Hardware path** — a hardened RTL state machine (FSM + reciprocal unit) that computes SC or MRC weights from `Z_j` with deterministic latency. Enables same-packet weight application.
 - **Software path** — PicoRV32 firmware reads `Z_j` from registers, computes any weight formula (ALMMSE, EMA-smoothed, custom), and writes `W_SHADOW` directly. Existing next-packet commit mechanism applies.
 
 A single register bit (`WGT_SRC`) selects which path commits to `W_ACTIVE`. Firmware can inspect the hardware-computed result at any time via read-only `W_HW` registers, regardless of which path is active.
@@ -36,9 +36,10 @@ With those defaults, `training_done` is sufficient to produce committed `W_ACTIV
 |---|---|---|
 | Bypass | 1 on lowest enabled antenna, 0 elsewhere | Immediate (no arithmetic) |
 | SC | 1 on max-power branch, 0 elsewhere | Hardware or software |
-| EGC | Unit-magnitude, conjugate phase of h_j | Hardware (CORDIC) or software |
 | MRC | Conjugate h_j scaled by total power | Hardware (reciprocal LUT) or software |
 | ALMMSE | Matrix inversion: W = (H·H^H + λI)^{-1}·H^H | Software only (PicoRV32) |
+
+EGC is not implemented in hardware. See [Future extensions](#future-extensions).
 
 ---
 
@@ -51,7 +52,7 @@ Training Accumulator
         v
  ┌──────────────────────┐   W_HW[3:0]  ──────► read-only registers
  │  Hardware Weight Gen │   (Q1.15)             (firmware can read or copy)
- │  FSM + CORDIC/recip  │─────────────────────────────────────┐
+ │  FSM + recip unit    │─────────────────────────────────────┐
  └──────────────────────┘                                     │
                                                               │  WGT_SRC = AUTO
         |  training_done IRQ                                  │
@@ -75,7 +76,7 @@ Training Accumulator
 |---|---|---|---|
 | 0 | `WGT_SRC` | 0=AUTO, 1=SW | Selects which path writes W_SHADOW and commits. AUTO: hardware FSM. SW: PicoRV32. |
 | 1 | `WGT_AUTO_COMMIT` | 0/1 | When `WGT_SRC=AUTO`: 1 = hardware commits W_HW → W_ACTIVE immediately on completion (same-packet). 0 = hardware writes W_HW but waits for firmware W_COMMIT pulse. |
-| 3:2 | `WGT_MODE` | 00=bypass, 01=SC, 10=EGC, 11=MRC | Combining formula used by the hardware path. Ignored when `WGT_SRC=SW`. |
+| 3:2 | `WGT_MODE` | 00=bypass, 01=SC, 10=reserved, 11=MRC | Combining formula used by the hardware path. Ignored when `WGT_SRC=SW`. Value 10 is reserved for a future EGC extension. |
 | 4 | `W_COMMIT` | write-1 pulse | Shared commit request into the Packet Control FSM after W_SHADOW has been fully written. |
 | 5 | `W_VALID` | read-only | Active W bank is valid. |
 | 6 | `W_PENDING` | read-only | A commit has been requested but not yet activated at `safe_switch`. |
@@ -146,22 +147,6 @@ w_j    = 1  if j == j_best,  else  0
 
 Four magnitude-squared computations, 4-way compare. ~4 cycles.
 
-### EGC — Equal Gain Combining
-
-```
-w_j = conj(H_j_cal) / |H_j_cal|
-```
-
-Unit-magnitude weight with conjugate phase. Implemented via CORDIC:
-
-1. CORDIC computes `angle(H_j_cal)` for each branch.
-2. Negate phase.
-3. CORDIC computes `(cos(−φ_j), sin(−φ_j))` → unit-magnitude phasor.
-
-Four CORDIC instances run in parallel (one per branch), or time-multiplexed over 4 cycles. CORDIC converges in 16 iterations → ~20 cycles total.
-
-Magnitude estimation alternative (lower area): `|z| ≈ max(|I|,|Q|) + 3/8·min(|I|,|Q|)` (~3% error). Acceptable for EGC since only the phase is used.
-
 ### MRC — Maximum Ratio Combining
 
 ```
@@ -193,7 +178,7 @@ SHIFT          — compute K, right-shift Z_j → H_j   (~4 cycles)
   ↓
 CALIBRATE      — H_j_cal = H_j · conj(cal_j)         (~8 cycles, 4 complex muls)
   ↓
-COMPUTE        — mode-dependent weight formula        (~20–30 cycles)
+COMPUTE        — mode-dependent weight formula        (~4 cycles SC, ~15 cycles MRC)
   ↓
 SCALE          — round to Q1.15, saturate            (~2 cycles)
   ↓
@@ -202,7 +187,7 @@ WRITE          — write W_HW[3:0]; if WGT_AUTO_COMMIT: write W_SHADOW, pulse W_
 IDLE
 ```
 
-Total hardware latency from `training_done` to `W_COMMIT`: ~35–50 cycles (~1.5 µs at 32 MHz).
+Total hardware latency from `training_done` to `W_COMMIT`: ~30–40 cycles (~1.25 µs at 32 MHz). Removal of the CORDIC path reduces the COMPUTE state from ~20–30 cycles to ~15 cycles (MRC reciprocal only).
 
 ---
 
@@ -234,7 +219,7 @@ The Packet Control FSM copies `W_SHADOW` → `W_ACTIVE` at the next `safe_switch
 
 | `WGT_AUTO_COMMIT` | Behaviour |
 |---|---|
-| 1 | Hardware commits immediately when WRITE state completes. Weights may become active before the payload starts — **same-packet application** if the hardware latency (~50 cycles) fits before the payload window (see Timing section). |
+| 1 | Hardware commits immediately when WRITE state completes. Weights may become active before the payload starts — **same-packet application** if the hardware latency (~40 cycles) fits before the payload window (see Timing section). |
 | 0 | Hardware writes W_HW, raises `wgen_hw_done` interrupt. Firmware can inspect W_HW, optionally modify, then pulse W_COMMIT manually. Effectively next-packet (firmware scheduling adds latency). |
 
 If `W_COMMIT` fires while a packet is active, the Packet Control FSM defers activation to the next idle boundary and sets `W_MISSED_PACKET`. This is expected next-packet behaviour, not an error.
@@ -243,31 +228,55 @@ If `W_COMMIT` fires while a packet is active, the Packet Control FSM defers acti
 
 ## Timing
 
+### LoRa packet structure and payload start
+
+The payload start sample is determined by the standard LoRa air-frame structure following the preamble:
+
+```
+timing_ref (preamble symbol 0)
+  │
+  ├─  8M   upchirp preamble (symbols 0–7)
+  ├─  2M   downchirp sync word
+  ├─  0.25M  quarter-upchirp SFD marker
+  └─  2M   network sync upchirps
+                                    ──────────────────────
+  total pre-payload:  12.25M        payload starts at timing_ref + 12.25M
+```
+
+This is fixed for a standard LoRa explicit-mode packet and is independent of SF or BW — the 12.25-symbol overhead scales with M.
+
+For the demo deployment (16-symbol preamble), the pre-payload overhead becomes 16 + 4.25 = 20.25M.
+
+### Same-packet weight commit window
+
+`training_done` fires at `timing_ref + 8M − 1` (end of the 8-symbol preamble). For weights to apply to the **current** packet's payload, `W_COMMIT` must fire and `W_ACTIVE` must be updated before the combiner processes `timing_ref + 12.25M`.
+
 ```
 sc_lock
   ↓
 Training accumulator collects preamble (5 of 8 symbols with SC_HITS_REQ=2)
-  ↓  training_done  (at timing_ref + 8M - 1 samples)
+  ↓  training_done  (at timing_ref + 8M − 1 samples)
 Hardware FSM: ~50 cycles → W_COMMIT
-  ↓
-Payload starts at timing_ref + ~12.25·M samples
+  ↓  [4.25M sample window]
+Payload starts at timing_ref + 12.25M samples
 ```
 
 At SF6 (M=64, f_s = 125 kS/s, 256 clock cycles/sample):
 
 ```
-training_done    ≈  timing_ref + 8·64 samples  =  timing_ref + 512 samples
-                 =  timing_ref + 131,072 cycles from preamble start
+training_done    =  timing_ref + 512 samples   =  131,072 cycles from preamble start
+payload start    =  timing_ref + 784 samples   =  200,704 cycles from preamble start
 
-payload start    ≈  timing_ref + 12.25·64 samples  ≈  timing_ref + 200,704 cycles
-
-time from training_done to payload:  ~69,632 cycles  ≈  2.2 ms
-hardware FSM latency:                ~50 cycles       ≈  1.6 µs
+commit window    =  272 samples  =  69,632 cycles  ≈  2.2 ms
 ```
 
-The hardware path has ~69,000 cycles of margin before the payload — same-packet application is achievable at SF6. At higher SF (longer M), the margin grows proportionally.
+| Path | Latency | Margin (cycles) | Margin (×) |
+|---|---|---|---|
+| Hardware FSM | ~40 cycles | 69,592 | ~1,740× |
+| Software (PicoRV32) | ~1,000–5,000 cycles | ~65,000–69,000 | ~14× |
+| Demo (16-symbol preamble) | ~5,000 cycles | ~200,000 | ~40× |
 
-Software path (PicoRV32): IRQ response + firmware execution adds ~1,000–5,000 cycles. Still well within the 69,000-cycle budget at SF6, but same-packet application depends on firmware scheduling not being blocked by other tasks.
+The margin is the time available for weight computation. Missing the window is not fatal: the Packet Control FSM sets `W_MISSED_PACKET` and activates the new weights at the next `safe_switch` (next packet idle boundary). The combiner uses the previous packet's weights or bypass for the current payload.
 
 ---
 
@@ -282,7 +291,7 @@ Software path (PicoRV32): IRQ response + firmware execution adds ~1,000–5,000 
 | `n_acc` | in | 10 | per packet | Number of samples in Z_j (unused in hardware path; informational for firmware) |
 | `wgt_src` | in | 1 | static | 0=hardware auto, 1=software override; from `WGT_CTRL[0]` |
 | `wgt_auto_commit` | in | 1 | static | 1=hardware auto-commits; from `WGT_CTRL[1]` |
-| `wgt_mode` | in | 2 | static | Hardware combining mode: 00=bypass, 01=SC, 10=EGC, 11=MRC; from `WGT_CTRL[3:2]` |
+| `wgt_mode` | in | 2 | static | Hardware combining mode: 00=bypass, 01=SC, 10=reserved, 11=MRC; from `WGT_CTRL[3:2]` |
 | `antenna_en` | in | 4 | static | Enabled branch mask |
 | `cal_j[3:0]` | in | 4×2×16 | static | Calibration coefficients (Q1.15 I+Q per branch, default 1+0j) |
 | `W_hw[3:0]` | out | 4×2×16 | per packet | Hardware-computed weights (Q1.15 I+Q); always written by hardware FSM; exported to read-only `W_HW` registers |
@@ -304,25 +313,20 @@ Software path (PicoRV32): IRQ response + firmware execution adds ~1,000–5,000 
    - 4 × complex multiply: H_j_cal = H_j · conj(cal_j)
    - Q1.15 calibration coefficients; result kept in int32
 
-3. **EGC CORDIC**
-   - 4 × CORDIC phase extractor + unit-magnitude phasor generator
-   - 16-stage pipeline; 4 branches in parallel or time-multiplexed
-   - Used for EGC mode; angle extraction also used in SC (magnitude)
-
-4. **MRC reciprocal unit**
+3. **MRC reciprocal unit**
    - Leading-zero normalise S → mantissa + exponent
    - 8-bit mantissa LUT (256 entries) → initial estimate
    - 2 Newton-Raphson iterations for ~15-bit precision
    - Multiply conj(H_j_cal) × recip → scale to Q1.15
 
-5. **SC comparator**
+4. **SC comparator**
    - 4 × magnitude-squared, 4-way maximum selector
-   - Integer logic only; no CORDIC or division
+   - Integer logic only; no division
 
-6. **Output scaler and saturator**
+5. **Output scaler and saturator**
    - Rounds to int16 Q1.15; saturates to ±32767
 
-7. **FSM controller**
+6. **FSM controller**
    - Sequences SHIFT → CALIBRATE → COMPUTE → SCALE → WRITE states
    - Gated by wgt_src (hardware path only active when WGT_SRC=AUTO)
    - Raises wgen_hw_done; auto-commits if WGT_AUTO_COMMIT=1
@@ -335,7 +339,6 @@ Software path (PicoRV32): IRQ response + firmware execution adds ~1,000–5,000 
 |---|---|---|
 | `NR` | 4 | Number of receive branches |
 | `W_OUT_BITS` | 16 | Q1.15 output width |
-| `CORDIC_STAGES` | 16 | CORDIC iterations for EGC phase; gives ~15-bit angular precision |
 | `RECIP_LUT_BITS` | 8 | Mantissa LUT precision for MRC reciprocal |
 | `RECIP_NR_ITERS` | 2 | Newton-Raphson refinement iterations after LUT |
 
@@ -346,7 +349,6 @@ Software path (PicoRV32): IRQ response + firmware execution adds ~1,000–5,000 
 | Test | Method | Pass criterion |
 |---|---|---|
 | MRC noiseless | Known h_j, exact Z_j | w_j matches conj(h_j)/Σ\|h\|² within Q1.15 rounding |
-| EGC noiseless | Known h_j | \|w_j\| = 1.0 ±LSB, angle(w_j) = −angle(h_j) |
 | SC noiseless | One strong branch | w_j = 1 on correct branch, 0 elsewhere |
 | Bypass | Any input | w_j = 1 on lowest enabled antenna |
 | Calibration | Load non-unity cal_j | H_j_cal = H_j · conj(cal_j) before weight compute |
@@ -357,7 +359,7 @@ Software path (PicoRV32): IRQ response + firmware execution adds ~1,000–5,000 
 | W_SHADOW write | Check register after wgen_active falls | All 8 half-words match expected Q1.15 values |
 | W_COMMIT timing | Check FSM interaction | Packet Control FSM defers to next idle boundary if packet is active; W_MISSED_PACKET set |
 | Shift normalisation | Z_j with large dynamic range | K computed correctly; no overflow in H_j after shift |
-| All branches equal | \|Z_j\| identical for j=0..3 | MRC weights equal-magnitude; EGC weights equal-magnitude |
+| All branches equal | \|Z_j\| identical for j=0..3 | MRC weights equal-magnitude across all branches |
 | Same-packet margin | SF6, WGT_AUTO_COMMIT=1 | W_COMMIT fires before payload start (timing_ref + 12.25·M samples) |
 | Reciprocal precision | S swept over full int64 range | \|1/S − recip(S)\| < 2^{−14} (14-bit accurate, sufficient for Q1.15) |
 
@@ -399,6 +401,26 @@ When `sigma2_j` is equal across branches this is exactly proportional to plain M
 Note: the per-branch MMSE form `conj(Z_j) / (|Z_j|² + sigma2_j * n_acc)` gives a signal-dependent denominator per branch and does **not** reduce to plain MRC even with equal noise — it is a different estimator and should not be confused with NW-MRC.
 
 The hardware path (`WGT_SRC=AUTO`) continues to use the equal-noise approximation and remains available as a fallback if `sigma2_valid=0`.
+
+---
+
+## Future extensions
+
+### EGC — Equal Gain Combining
+
+EGC (`w_j = conj(H_j_cal) / |H_j_cal|`) was considered for the hardware path and dropped in favour of MRC. Reasons:
+
+- MRC is the optimal linear combiner and is ~1 dB better than EGC at NR=4
+- EGC requires a 16-stage × 4-branch CORDIC (the largest datapath element), while MRC only needs the existing reciprocal LUT + Newton-Raphson unit
+- The one advantage of EGC — robustness to amplitude estimation noise — is not significant with 5+ preamble symbols of training
+- EGC is available via the software path (`WGT_SRC=SW`) for any deployment that needs it
+
+If EGC hardware acceleration is added in a future revision:
+
+- Add a 16-stage CORDIC per branch (or one time-multiplexed instance for all 4 branches)
+- CORDIC vectoring mode extracts `φ_j = atan2(Q_j, I_j)` from `H_j_cal`; rotation mode synthesises `(cos φ_j, −sin φ_j)` — two passes, ~32 cycles total
+- Assign `WGT_MODE = 2'b10` (currently reserved)
+- The magnitude approximation `|z| ≈ max(|I|,|Q|) + (3/8)·min(|I|,|Q|)` (~3% error, shifts and adds only) is an alternative if a full CORDIC is not justified
 
 ---
 

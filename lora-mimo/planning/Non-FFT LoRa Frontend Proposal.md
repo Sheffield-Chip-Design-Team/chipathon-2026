@@ -360,7 +360,7 @@ Outputs:
 
 Role:
 
-- convert the combined `int16` complex stream back to the 1-bit format expected by `SX1302`
+- convert the combined `int8` complex stream back to the 1-bit format expected by `SX1302`
 
 This remains unchanged from the current overall system concept.
 

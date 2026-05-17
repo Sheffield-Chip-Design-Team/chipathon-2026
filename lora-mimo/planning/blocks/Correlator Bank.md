@@ -253,7 +253,17 @@ FRONTEND_BUF
 - `SC_HITS_REQ = 2`: default
 - `SC_HITS_REQ = 3`: conservative / noisy environment mode
 
-**Fixed 8-symbol preamble.** SC does not need to detect the preamble length. With `SC_HITS_REQ = 2`, lock asserts after symbols 2–3. The training accumulator independently collects all 8 symbols starting from `timing_ref`. The 8-symbol boundary is structural, not detected.
+**Preamble length dependency.** SC does not detect preamble length — it simply accumulates per symbol pair until `SC_HITS_REQ` consecutive hits occur. The hardware works correctly with any preamble length ≥ `SC_HITS_REQ + 1` symbols; no register changes are needed for longer preambles.
+
+The interaction between `SC_HITS_REQ` and preamble length governs two things:
+
+1. **Training accumulator N_acc.** Lock asserts after consuming `SC_HITS_REQ + 1` symbols. The training accumulator then collects the remaining preamble symbols. Remaining symbols = preamble_length − (SC_HITS_REQ + 1). For the default 8-symbol preamble with SC_HITS_REQ=2: N_acc ≈ 5·M. For a 16-symbol preamble with SC_HITS_REQ=2: N_acc ≈ 13·M — channel estimates improve by √(13/5) ≈ 1.6× in amplitude SNR. In practice, 5·M already gives well above-unity channel estimate SNR at the LoRa sensitivity threshold for SF≥7, so the gain is negligible there. The benefit is most pronounced at SF6 near the sensitivity limit where the estimation margin is tightest.
+
+2. **SC_HITS_REQ headroom.** With an 8-symbol preamble and SC_HITS_REQ=2, only 3 preamble symbols are consumed before lock — leaving 5 for training. Raising SC_HITS_REQ to 3 consumes 4 symbols, leaving 4 for training (N_acc ≈ 4·M). This is still adequate for SF≥7 at the sensitivity threshold. A 16-symbol preamble allows SC_HITS_REQ=3 with 12 symbols remaining for training — recommended for noisy urban deployments where false-alarm suppression matters.
+
+**Minimum preamble constraint:** preamble_length ≥ SC_HITS_REQ + 2 (at least 1 symbol of training headroom after lock). With SC_HITS_REQ=2, minimum preamble is 4 symbols. With SC_HITS_REQ=3, minimum is 5 symbols. Shorter preambles will lock late or miss the payload window entirely.
+
+**Deployment recommendation:** configure SC_HITS_REQ=3 when the deployment uses ≥ 10-symbol preambles (available via LoRaWAN NS preamble length parameter). This reduces false-alarm rate without meaningful training loss at SF≥7.
 
 **Clock gating.** Block is always-on between packets. Gate all accumulators by `iq_valid` and additionally gate by `delayed_valid` (from FRONTEND_BUF) to suppress spurious accumulation before the buffer has filled.
 
@@ -266,12 +276,24 @@ FRONTEND_BUF
 | Noiseless lock | Pure upchirp preamble, NR=4, SF6 | `sc_lock` asserts within `N_hit + 1` symbols |
 | CFO immunity | Inject ε = ±19 kHz (worst case: 20 ppm TX + 2 ppm RX gateway at 868 MHz) | `sc_lock` still asserts; timing_ref within ±3 samples |
 | Timing immunity | Random timing offset n₀ ∈ [0, M) | `sc_lock` asserts consistently |
-| False-alarm rate | White noise input, 10,000 windows | `sc_lock` rate < 0.1% |
+| False-alarm rate (float) | White noise input, 10,000 windows | `sc_lock` rate < 0.1% |
+| **8-bit vs float false-alarm** | **White noise, 8-bit quantised vs float, SF6 M=64, 10,000 windows** | **False-alarm rate difference < 0.01%; no noise-noise cross-product bias visible above float baseline** |
 | Chirp-cancel equivalence | Compare raw-sample SC vs dechirped SC | Identical `sc_lock`, `timing_ref`, `c_j` values |
 | 8-bit saturation | Strong signal clipped to ±127 at SRAM write | `sc_lock` still asserts; no wrap-around corruption |
 | C_pool diagnostic | Known channel, known CFO | `cfo_diag` within ±1 bin of true CFO |
 | Hit-count sweep | `SC_HITS_REQ = 1, 2, 3` | Lock latency and false-alarm match expectation |
 | Accumulator overflow | Max-amplitude input, M=64 | No overflow in int32 accumulators; int64 headroom confirmed |
+
+---
+
+## Open items
+
+**Simulate SC false-alarm rate with 8-bit quantised inputs at SF6.** The 8-bit quantisation decision was validated for the training accumulator path but SC detection performance with 8-bit SRAM samples has not been simulated. The concern is the noise-noise cross-product term `q[n]·q*[n-M]` in the autocorrelation — for i.i.d. quantisation errors this has zero mean but could shift the false-alarm floor relative to the float model, particularly at SF6 where M=64 provides the least averaging. Simulate:
+- 10,000 noise-only windows at SF6 (M=64), 8-bit quantised vs float
+- Compare false-alarm rate at θ_SC = 0.90 and 0.75
+- Pass criterion: false-alarm rate difference < 0.01%; if larger, raise threshold or add SF6-specific `SC_HITS_REQ=3` recommendation
+
+This should be included in the GNU Radio sweep alongside the BER validation in the ΣΔ Decimator spec.
 
 ---
 

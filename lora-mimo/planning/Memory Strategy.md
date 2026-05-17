@@ -32,6 +32,18 @@ Linker/runtime rule:
 
 **Area:** Frontend Buffer uses 2 × `gf180mcu_fd_ip_sram__sram512x8m8wm1` = **~0.42 mm²** total based on the GF PDK physical dimensions (431.86 µm × 484.88 µm = 209400.2768 µm² each). CPU unified SRAM uses 4 × `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` = **~0.62 mm²** based on the experimental library dimensions currently referenced for the CPU memory plan. Total SRAM area under this mixed-library assumption is **~1.04 mm²**.
 
+### Post-extraction timing verification
+
+**Post-layout extraction simulations are required for both SRAM types before RTL sign-off.**
+
+- **`gf180mcu_fd_ip_sram__sram512x8m8wm1` (DSP SRAMs, "5V Green" macro operated at 3.3 V):** The 55.6 ns minimum cycle time figure is from the datasheet characterisation at 3.3 V. Post-extraction sim must confirm actual access time and cycle time at 3.3 V, 32 MHz, worst-case process corner (slow-slow) and temperature (+85 °C). If extracted propagation delay shows tCYC > 62.5 ns (i.e. the 2-cycle budget is violated), the Frontend Buffer Controller access protocol must move to 3 cycles per byte, which halves the R=32 slack to zero.
+
+- **`gf180mcu_ocd_ip_sram__sram1024x8m8wm1` (CPU unified SRAM, experimental macro):** No datasheet characterisation exists for this macro. Post-extraction sim is the only basis for a confirmed cycle time at 3.3 V. The 2-cycle multicycle path on the PicoRV32 AHB-Lite bus is assumed to be sufficient; if extracted delay shows tCYC > 62.5 ns, a 3-cycle path is needed and the firmware loop timing budget must be recalculated.
+
+Both simulations must be run at slow-slow corner, 1.62 V (minimum supply), and +85 °C to establish worst-case timing.
+
+---
+
 ### Core voltage decision — 3.3 V
 
 **The core logic supply is 3.3 V.** The current memory plan intentionally uses a **mixed SRAM library strategy**: official GF `gf180mcu_fd_ip_sram` macros for the DSP/frontend buffer, and experimental `gf180mcu_ocd_ip_sram` macros for the CPU unified SRAM. All selected macros are intended to run at 3.3 V. Running the core at 3.3 V places all logic and all SRAMs on the same rail, eliminating any need for level shifters at SRAM interfaces. It also allows `VDD_CORE` and `VDD_IO` to share a supply (both 3.3 V), simplifying the board power tree.
@@ -64,7 +76,7 @@ The Frontend Buffer SRAMs (SRAM0, SRAM1) are in the real-time acquisition critic
 
 The `gf180mcu_fd_ip_sram__sram512x8m8wm1` macro size exactly matches the required 2-channel × 128-sample rolling window at 8-bit storage. No level shifters are required — core logic and SRAM share the 3.3 V rail.
 
-The 55.6 ns SRAM cycle time is not a concern for the frontend buffer: the ΣΔ decimated sample rate (125 kS/s–1 MS/s) is far below 18 MHz. The buffer controller issues at most one SRAM access per decimated sample; no multi-cycle constraint is needed here.
+The 55.6 ns SRAM cycle time requires **2 clock cycles per byte access** at 32 MHz (2 × 31.25 ns = 62.5 ns > 55.6 ns). No divided clock is needed — the Frontend Buffer Controller FSM holds each address stable for 2 cycles before advancing, exactly as the CPU SRAM multicycle path does. Each sample time requires 4 reads + 4 writes = 16 cycles total (was previously documented as 8 cycles — that was incorrect). At the primary sample rates (R=256/128/64) the SRAM utilisation is 6–25%; at R=32 (1 MS/s debug mode) it is 50%, leaving 16 idle cycles per sample for control logic.
 
 ### CPU SRAMs — experimental macros at 3.3 V
 
@@ -154,23 +166,34 @@ The intended priority is:
 
 BIST runs at power-on, before the host releases `CPU_RESET` for the CPU SRAM banks and before acquisition mode is entered for the DSP SRAMs. All results are readable via SPI.
 
-### DSP SRAMs (proven macros) — pass/fail only
+### DSP SRAMs (proven macros) — address-reporting with zero-substitution
 
-March-5N write/read pattern on each 512 B macro independently. Simple pass/fail result is sufficient because individual bad-word address is not needed for the degraded-mode policy.
+March-5N write/read pattern on each 512 B macro independently. Faults are reported at **sample-time granularity** (4-byte groups): if any byte in a group fails, the entire sample-time address is marked bad. The host programs bad addresses into a per-macro zero-substitution CAM in the Frontend Buffer Controller after BIST.
+
+**Zero-substitution principle.** For SC correlation, returning zero for a bad delayed sample is safe — the term drops from the accumulation rather than corrupting it. At SF7 (M=128), one bad sample time reduces effective integration to 127/128 (~0.03 dB loss). Both numerator and denominator of the SC lock condition lose the same term, so the ratio is preserved and no threshold adjustment is needed.
+
+**SF-range awareness.** Only faults within sample-time addresses `[0, M)` are counted against the CAM budget. Faults at addresses ≥ M are never accessed at the current SF and are ignored.
 
 | Register | Description |
 |---|---|
-| `SRAM0_BIST_PASS` | 1 = SRAM0 passed all March-5N patterns |
-| `SRAM1_BIST_PASS` | 1 = SRAM1 passed all March-5N patterns |
+| `SRAM0_BIST_PASS` | 1 = SRAM0 passed with no faults |
+| `SRAM0_BAD_SAMPLE_COUNT` | Number of bad sample-time addresses found in SRAM0 |
+| `SRAM0_ZERO_SUB_n_ADDR` (n=0..15) | Bad sample-time address for CAM entry n |
+| `SRAM0_ZERO_SUB_n_VALID` (n=0..15) | Enable for CAM entry n |
+| `SRAM1_BIST_PASS` | 1 = SRAM1 passed with no faults |
+| `SRAM1_BAD_SAMPLE_COUNT` | Number of bad sample-time addresses found in SRAM1 |
+| `SRAM1_ZERO_SUB_n_ADDR` (n=0..15) | Bad sample-time address for CAM entry n |
+| `SRAM1_ZERO_SUB_n_VALID` (n=0..15) | Enable for CAM entry n |
 
 Degraded-mode policy:
 
 | SRAM status | Acquisition mode |
 |---|---|
-| Both pass | Full NR=4 |
-| SRAM0 fails | NR=2 using ch2/ch3 (SRAM1) |
-| SRAM1 fails | NR=2 using ch0/ch1 (SRAM0) |
-| Both fail | Bypass only; SC acquisition disabled |
+| Both pass (count = 0) | Full NR=4, no substitution |
+| Either macro: count ≤ 16 within `[0, M)` | NR=4 with zero-substitution; slight integration loss |
+| SRAM0: count > 16 within `[0, M)` | NR=2 using ch2/ch3 (SRAM1) |
+| SRAM1: count > 16 within `[0, M)` | NR=2 using ch0/ch1 (SRAM0) |
+| Both macros: count > 16 within `[0, M)` | Bypass only; SC acquisition disabled |
 
 ### CPU SRAM (banked qualification on unified physical SRAM)
 
@@ -338,8 +361,18 @@ These registers live in the main register map at `0x10000` (AHB-Lite peripheral 
 
 | Register | Offset | R/W | Description |
 |---|---|---|---|
-| `SRAM0_BIST_PASS` | TBD | R | DSP SRAM0 BIST result (1=pass) |
-| `SRAM1_BIST_PASS` | TBD | R | DSP SRAM1 BIST result (1=pass) |
+| `SRAM_DUMP_ADDR` | TBD | R/W | Bits [8:0] = byte address (0–511); bit [9] = macro select (0=SRAM0, 1=SRAM1) |
+| `SRAM_DUMP_DATA` | TBD | R | Byte at SRAM_DUMP_ADDR; valid one SPI transaction after address write |
+| `SRAM_DUMP_START` | TBD | W | Write 1 to enter dump mode; only accepted in Locked (post-sc_lock) state |
+| `SRAM_DUMP_DONE` | TBD | R | 1 = dump controller idle; SRAM_DUMP_DATA valid |
+| `SRAM0_BIST_PASS` | TBD | R | DSP SRAM0 BIST result (1=pass, no faults) |
+| `SRAM0_BAD_SAMPLE_COUNT` | TBD | R | Number of bad sample-time addresses in SRAM0 |
+| `SRAM0_ZERO_SUB_n_ADDR` (n=0..15) | TBD | R/W | SRAM0 zero-sub CAM entry n: sample-time address (7-bit) |
+| `SRAM0_ZERO_SUB_n_VALID` (n=0..15) | TBD | R/W | SRAM0 zero-sub CAM entry n enable |
+| `SRAM1_BIST_PASS` | TBD | R | DSP SRAM1 BIST result (1=pass, no faults) |
+| `SRAM1_BAD_SAMPLE_COUNT` | TBD | R | Number of bad sample-time addresses in SRAM1 |
+| `SRAM1_ZERO_SUB_n_ADDR` (n=0..15) | TBD | R/W | SRAM1 zero-sub CAM entry n: sample-time address (7-bit) |
+| `SRAM1_ZERO_SUB_n_VALID` (n=0..15) | TBD | R/W | SRAM1 zero-sub CAM entry n enable |
 | `IMEM_BIST_PASS` | TBD | R | IMEM March C- result (1=pass) |
 | `IMEM_BIST_FAIL_ADDR` | TBD | R | First failing IMEM word address |
 | `IMEM_BIST_FAIL_BITS` | TBD | R | Failing bit mask at `IMEM_BIST_FAIL_ADDR` |

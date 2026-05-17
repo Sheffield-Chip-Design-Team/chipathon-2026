@@ -11,7 +11,9 @@ RX path stage 2. See [DSP Flow](../DSP%20Flow.md) for context.
 
 Converts the 1-bit sigma-delta bitstream from each SX1257 ΣΔ ADC into full-precision complex I+Q samples. Four identical instances — one per antenna. A power-of-2 CIC filter performs the primary decimation; an FIR compensation filter corrects the sinc frequency droop.
 
-**Output precision:** The decimator outputs full-precision samples (12-bit or 16-bit per component, TBD — see open item below). **The 8-bit saturation for SRAM storage is performed by the Frontend Buffer Controller, not here.** The training accumulator, combiner, and AGC energy tap all require full-precision samples from this block.
+**Output precision:** The decimator outputs **8-bit signed** samples per I and Q component. This is the full resolution of the digital processing chain — no further truncation is applied downstream. See open item below for GNU Radio confirmation.
+
+**Design note:** 8-bit was chosen over 12-bit after simulation showed no BER degradation at either width across the full operating SNR range (SF=7, NR=4, training accumulator path). The low-gain edge case (AGC at minimum, high channel power) is benign: quantization noise can exceed thermal noise only when SNR is high, so decoding is unaffected. 8-bit allows the training accumulator to use int32 instead of int64, and the Frontend Buffer write path requires no saturation shift. See sim/tests/test_bitwidth_sweep.py for the simulation. **Pending GNU Radio confirmation — see open item.**
 
 ---
 
@@ -78,8 +80,8 @@ All R values are power-of-2. Samples/symbol = 2^SF for all SF and all BW setting
 | `clk_32m` | in | — | 32 MHz | Shared clock from SX1257_1 `CLK_OUT` |
 | `rst_n` | in | — | — | Active-low reset |
 | `decim_ratio` | in | 2 | static | 0=R256 (125 kS/s / 125 kHz BW), 1=R128 (250 kS/s / 250 kHz BW), 2=R64 (500 kS/s / 500 kHz BW), 3=R32 (1 MS/s / 500 kHz BW 2×) |
-| `iq_out_i` | out | 12–16 signed | $f_s$ | Decimated I sample (full precision; width TBD) |
-| `iq_out_q` | out | 12–16 signed | $f_s$ | Decimated Q sample (full precision; width TBD) |
+| `iq_out_i` | out | 8 signed | $f_s$ | Decimated I sample |
+| `iq_out_q` | out | 8 signed | $f_s$ | Decimated Q sample |
 | `iq_valid` | out | 1 | $f_s$ | High for one cycle when output is valid |
 
 ---
@@ -92,7 +94,7 @@ All R values are power-of-2. Samples/symbol = 2^SF for all SF and all BW setting
 | CIC stages ($N$) | 3 | Balanced for area and stopband rejection |
 | Accumulator width | 25-bit | `1 + N·log₂(R_max) = 1 + 3·8 = 25` bits; covers all four ratios |
 | FIR taps | 32 | Single coefficient set — droop shape identical for all R values |
-| Output width | 12–16 bit signed (TBD) | Convergent rounding from normalised accumulator; see open item |
+| Output width | 8-bit signed | Convergent rounding from 25-bit CIC accumulator; normalisation right-shift 17 (R=256), 14 (R=128), 11 (R=64), 8 (R=32) |
 
 ---
 
@@ -115,9 +117,8 @@ R is set by `decim_ratio` (selects counter width 8, 7, or 6 bits for R=256/128/6
 * $R=64  \rightarrow G = 64^3  = 2^{18}$
 * $R=32  \rightarrow G = 32^3  = 2^{15}$
 
-Normalisation right-shift: `shift = N·log₂(R) − (W_out − 1)`.
-* 12-bit output: R=256 → shift 13; R=128 → shift 10; R=64 → shift 7; R=32 → shift 4.
-* 16-bit output: R=256 → shift 9;  R=128 → shift 6;  R=64 → shift 3; R=32 → shift 0.
+Normalisation right-shift: `shift = N·log₂(R) − (W_out − 1)` with W_out = 8.
+* R=256 → shift 17; R=128 → shift 14; R=64 → shift 11; R=32 → shift 8.
 
 **FIR Compensation.** The normalised CIC droop is sinc³(f/fs_out). Since all three R values use 1× oversampling, the band edge always sits at Nyquist (f/fs_out = 0.5). One coefficient set corrects all three ratios.
 
@@ -127,13 +128,12 @@ Normalisation right-shift: `shift = N·log₂(R) − (W_out − 1)`.
 
 ## Open items
 
-**Output width TBD.** 12-bit or 16-bit per component. This affects:
-- Accumulator shift amount
-- Training accumulator int64 overflow margin (see [Training Accumulator](Training%20Accumulator.md) §Accumulator arithmetic)
-- Frontend Buffer saturation shift (`clamp(sample >> (W_out - 8), -128, 127)`)
-- Combiner input headroom
+**Confirm 8-bit precision with GNU Radio.** The 8-bit output width decision is based on Python simulations (sim/tests/test_bitwidth_sweep.py) showing no BER degradation vs float across SF=7, NR=4, SNR=-10 to +10 dB. Confidence is high (~90%) but the simulation uses an idealised channel model and assumed SC lock timing. Before RTL freeze, validate with GNU Radio (gr-lora or gr-lora_sdr) using:
+- Real or simulated LoRa packets decoded end-to-end through the 8-bit quantised chain
+- Sweep SF, SNR, and BW to confirm no sensitivity cliff at 8-bit vs higher precision
+- Verify SC detection performance with 8-bit inputs specifically (the current simulation assumes perfect SC lock timing)
 
-16-bit is the safe choice; 12-bit saves area. Implement as a parameter.
+If GNU Radio confirms no degradation, 8-bit is locked. If a sensitivity penalty is found at any operating point, revisit 12-bit (int64 training accumulator required — see Training Accumulator spec).
 
 ---
 
@@ -152,8 +152,8 @@ Normalisation right-shift: `shift = N·log₂(R) − (W_out − 1)`.
 ## Related blocks
 
 - [Register Map](../Register%20Map.md) — `DECIM_CFG` at `0x12`
-- [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — receives full-precision output; performs 8-bit saturation for SRAM storage
-- [Training Accumulator](Training%20Accumulator.md) — receives full-precision output directly (not from SRAM)
-- [Energy Measurement](Energy%20Measurement.md) — receives full-precision output; clock-gated by `iq_valid`
-- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — receives full-precision output
+- [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — receives 8-bit output; stored directly to SRAM with no shift
+- [Training Accumulator](Training%20Accumulator.md) — receives 8-bit output directly (not from SRAM)
+- [Energy Measurement](Energy%20Measurement.md) — receives 8-bit output; clock-gated by `iq_valid`
+- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — receives 8-bit output
 - [DSP Flow](../DSP%20Flow.md) — updated pipeline rates

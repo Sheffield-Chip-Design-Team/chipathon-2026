@@ -9,7 +9,7 @@ RX path stage 9. See [DSP Flow](../DSP%20Flow.md) for context.
 
 ## Function
 
-3rd order feed-forward sigma-delta modulator converting int16 combined samples back to a 1-bit I+Q bitstream at 32 MS/s for the SX1302 Radio A input. Single instance.
+3rd order feed-forward sigma-delta modulator converting int8 combined samples back to a 1-bit I+Q bitstream at 32 MS/s for the SX1302 Radio A input. Single instance.
 
 ```
 Three cascaded ideal integrators (Z⁻¹/(1−Z⁻¹)) with feed-forward
@@ -18,7 +18,7 @@ Integrators must saturate — not wrap — to ensure stability.
 Input must be kept below −3 dBFS for stable operation.
 ```
 
-OSR = 256 / 128 / 64 for 125 / 250 / 500 kHz BW respectively (32 MS/s / f_s). In-band SQNR > 100 dB at the lowest OSR (64, 500 kHz BW) — int16 input is conservative at all supported bandwidths.
+OSR = 256 / 128 / 64 for 125 / 250 / 500 kHz BW respectively (32 MS/s / f_s). In-band SQNR > 100 dB at the lowest OSR (64, 500 kHz BW). The 8-bit input gives ~50 dB in-band SQNR, which exceeds LoRa decoding requirements by > 50 dB at all operating SNRs.
 
 ---
 
@@ -26,8 +26,8 @@ OSR = 256 / 128 / 64 for 125 / 250 / 500 kHz BW respectively (32 MS/s / f_s). In
 
 | Port | Direction | Width | Rate | Description |
 | --- | --- | --- | --- | --- |
-| `in_i` | in | 16 signed | f_s | I from combiner |
-| `in_q` | in | 16 signed | f_s | Q from combiner |
+| `in_i` | in | 8 signed | f_s | I from combiner (÷2 already applied in combiner MRC output stage) |
+| `in_q` | in | 8 signed | f_s | Q from combiner (÷2 already applied in combiner MRC output stage) |
 | `in_valid` | in | 1 | f_s | Sample strobe |
 | `en` | in | 1 | static | 0 = output driven to midscale idle (for gating during TX window if required) |
 | `clk_32m` | in | — | 32 MHz | Master clock |
@@ -43,9 +43,10 @@ OSR = 256 / 128 / 64 for 125 / 250 / 500 kHz BW respectively (32 MS/s / f_s). In
 | --- | --- | --- |
 | Modulator order | 3 | Feed-forward topology |
 | OSR | 256 / 128 / 64 | 32 MS/s / f_s; 125 kHz BW → OSR=256, 250 kHz → 128, 500 kHz → 64 |
-| Integrator width | 20-bit signed | Prevents saturation at full-scale input |
+| Integrator width | 12-bit signed | 8-bit input + 4 bits stability headroom; prevents saturation at full-scale input |
 | Feed-forward coefficients | Per NTF design | Optimise for SQNR; see Lee/Schreier DELSIG reference |
-| Input full-scale | −3 dBFS max | Stability constraint for 3rd order; firmware must ensure combiner output stays within this |
+| Input ÷2 shift | Fixed 1-bit right-shift | Applied in the combiner MRC output stage (not here); bypass path receives no ÷2 |
+| Input full-scale | −3 dBFS max (after ÷2) | Stability constraint; AGC owns this — see AGC headroom constraint |
 
 ---
 
@@ -55,7 +56,7 @@ OSR = 256 / 128 / 64 for 125 / 250 / 500 kHz BW respectively (32 MS/s / f_s). In
 
 **Integrator saturation.** Each integrator accumulator must clamp to ±(2^(width−1)−1) rather than wrap. Wrap-around causes instability that does not self-recover. Use saturating adders.
 
-**Input level constraint.** 3rd order ΣΔ modulators with Lee's criterion require input < −3 dBFS. PicoRV32 firmware must scale W matrix output to stay within this limit. Consider a right-shift register between combiner and re-mod (e.g. divide by 2 to guarantee headroom).
+**Input level constraint.** 3rd order ΣΔ modulators with Lee's criterion require input < −3 dBFS. The re-modulator receives int8 directly from the combiner. The combiner MRC output stage applies the ÷2 right-shift (absorbing √NR=4 combining gain); the bypass path delivers int8 directly with no ÷2, preserving the full per-branch amplitude. In both modes the remod receives a signal scaled to approximately per-branch decimator amplitude. The AGC is responsible for keeping per-branch amplitude below −3 dBFS; no additional scaling at the remod input is needed. The ÷2 in the MRC path costs 6 dB of dynamic range there, but with 8-bit input the in-band SQNR is already limited to ~44 dB after ÷2, which far exceeds LoRa requirements.
 
 **Clock domain.** Input is at f_s (in_valid strobe); modulator runs at 32 MHz. On `in_valid`, latch the input into a register and run the 3rd order loop at 32 MHz for the next 32 cycles.
 
@@ -76,8 +77,17 @@ OSR = 256 / 128 / 64 for 125 / 250 / 500 kHz BW respectively (32 MS/s / f_s). In
 
 ---
 
+## Open items
+
+**Validate 8-bit input with cocotb simulation.** The integrator width reduction from 20-bit to 12-bit and the int8 input truncation after ÷2 are based on analysis at the AGC operating point (−12 dBFS per branch, NR=4 MRC). Before RTL freeze, verify with cocotb:
+- Sine at −6 dBFS input: SQNR after decimation > 40 dB (expected ~44 dB)
+- AGC transient: brief overload at 0 dBFS per branch before AGC settles; confirm saturation to int8 does not cause modulator latch-up
+- Confirm 12-bit integrators do not saturate at maximum stable input level (−3 dBFS)
+
+---
+
 ## Related blocks
 
-- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — int16 input
+- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — int8 output (MRC: int32 ÷2 → int8; bypass: direct int8)
 - [System Architecture](../System%20Diagram.md) — REMOD_CLK routing, SX1302 interface
 - [DSP Flow](../DSP%20Flow.md)

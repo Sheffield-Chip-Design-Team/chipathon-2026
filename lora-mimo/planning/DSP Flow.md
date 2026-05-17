@@ -47,16 +47,16 @@ Two operating modes share the same hardware:
 | Stage | Block | Input | Output | Rate | Mode |
 | --- | --- | --- | --- | --- | --- |
 | 1 | SX1257 ΣΔ ADC (×4) | RF signal at each antenna | 1-bit I + 1-bit Q × 4 | 32 MS/s | All |
-| 2 | ΣΔ Decimator — CIC + FIR (×4) | 1-bit I+Q × 4 | int8–16 complex × 4 | **125 kS/s – 1 MS/s** | All |
+| 2 | ΣΔ Decimator — CIC + FIR (×4) | 1-bit I+Q × 4 | int8 complex × 4 | **125 kS/s – 1 MS/s** | All |
 | 3 | DC Removal (×4) | Full-precision complex × 4 | DC-removed complex × 4 | f_s | All |
 | 4 | Frontend Buffer Controller | DC-removed samples | current + M-delayed samples per branch | f_s | Mode 1 |
 | 5 | SC Preamble Detector | current + delayed samples | `sc_lock`, `timing_ref` | per 2 sym | Mode 1 |
 | 5.5 | Packet Control FSM | `sc_lock`, `timing_ref`, `training_done`, `W_commit` | `buf_freeze`, `combiner_source`, `safe_switch` | per packet | Mode 1 |
 | 6 | Training Accumulator | DC-removed samples, `sc_lock`, `timing_ref` | `Z_j` (complex channel estimates), `E_ref`, `training_done` | per packet | Mode 1 |
 | 7 | Weight Generation | `Z_j`, `training_done` | `W_SHADOW`, `W_COMMIT` | per packet | Mode 1 |
-| 7' | Bypass MUX | int8 from selected antenna | int16 sign-extended | f_s | Mode 2 only |
+| 7' | Bypass MUX | int8 from selected antenna | int8 (no sign-extension needed) | f_s | Mode 2 only |
 | 8 | MRC Combiner | `W_ACTIVE`, `x_j[n]` (4 branches) | `ŷ[n]` (1 stream) | f_s | Mode 1 |
-| 9 | ΣΔ Re-modulator (3rd order) | int16 I+Q | 1-bit I+Q | 32 MS/s | All |
+| 9 | ΣΔ Re-modulator (3rd order) | int8 I+Q from combiner | 1-bit I+Q | 32 MS/s | All |
 
 ---
 
@@ -64,11 +64,11 @@ Two operating modes share the same hardware:
 
 `MIMO_CTRL.MODE = 1` (register value 1, referred to as Mode 2 in human-facing numbering).
 
-Stages 4–8 (SC detector, frontend buffer, training accumulator, weight generation, combiner) are clock-gated and their outputs ignored. A bypass MUX immediately after the decimators routes a single antenna's int8 samples directly into REMOD_A, sign-extended to int16:
+Stages 4–8 (SC detector, frontend buffer, training accumulator, weight generation, combiner) are clock-gated and their outputs ignored. A bypass MUX immediately after the decimators routes a single antenna's int8 samples directly into REMOD_A:
 
 ```
 bypass_sel = lowest set bit of ANTENNA_EN[3:0]
-remod_a_in = sign_extend(x[bypass_sel][n])
+remod_a_in = x[bypass_sel][n]   // int8 directly; no sign-extension needed
 ```
 
 **Antenna selection.** The lowest-numbered enabled antenna in `ANTENNA_EN` is used. Disable unwanted antennas via `ANTENNA_EN` before entering passthrough mode to choose a specific antenna.
@@ -226,9 +226,9 @@ Before current-packet W is valid, the combiner falls back to the selected bypass
 
 ```
 if !W_valid:
-    y[n] = sign_extend(x[bypass_sel][n])
+    y[n] = x[bypass_sel][n]        // int8 direct, no ÷2
 else:
-    y[n] = w^H · x[n]
+    y[n] = (w^H · x[n]) >> 1      // MRC: int32 ÷2 → int8
 ```
 
 `W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` switch only at `safe_switch` boundaries (IDLE between packets). If W is not ready when the current packet ends, it activates on the next packet.
@@ -239,7 +239,7 @@ See [MRC Combiner](blocks/ALMMSE-MRC%20Combiner.md).
 
 ## Stage 9 — ΣΔ Re-modulation
 
-3rd order feed-forward ΣΔ modulator converts combined int16 samples back to a 32 MS/s bitstream for the SX1302 Radio A input.
+3rd order feed-forward ΣΔ modulator converts combined int8 samples back to a 32 MS/s bitstream for the SX1302 Radio A input. The combiner MRC output stage applies ÷2 (absorbing √NR=4 combining gain) before delivering int8; the bypass path delivers int8 directly.
 
 | BW | f_s (combiner output) | OSR | In-band SQNR (3rd order) |
 | --- | --- | --- | --- |
@@ -248,7 +248,7 @@ See [MRC Combiner](blocks/ALMMSE-MRC%20Combiner.md).
 | 500 kHz | 500 kS/s | 64 | > 100 dB |
 | 500 kHz (2×) | 1 MS/s | 32 | > 85 dB |
 
-All OSR values give SQNR far exceeding LoRa requirements. The int16 combiner output is conservative — the quantisation noise floor is negligible at all supported bandwidths.
+All OSR values give SQNR far exceeding LoRa requirements. The 8-bit input gives ~44 dB effective SQNR (after ÷2); the quantisation noise floor is negligible at all supported bandwidths.
 
 See [ΣΔ Re-modulator](blocks/ΣΔ%20Re-modulator.md).
 
@@ -301,7 +301,7 @@ Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitiv
 | Decimation ratios | R=256, 128, 64, 32 | Native support for 125, 250, 500 kHz BW (1×) plus 1 MS/s (2× / 500 kHz); power-of-2 ensures integer M for all SF |
 | SC detection window | 2M samples (current + M-delayed) | Buffer stores M samples (D=M); SC correlation spans 2M |
 | Training accumulation | ~5 symbols (SC_HITS_REQ=2) | ~2 dB loss vs ideal 8-symbol average; acceptable baseline |
-| Weight gen (hardware) | ~50 clock cycles | Same-packet application feasible at all supported SF |
-| Weight gen (software) | < 5,000 cycles | > 1000× margin before payload at SF6/125 kHz |
+| Weight gen (hardware) | ~50 clock cycles | Same-packet application feasible at all supported SF; ~1,390× margin at SF6, ~2,780× at SF7 (commit window = 4.25M samples between training_done and payload start) |
+| Weight gen (software) | < 5,000 cycles | ~14× margin at SF6/125 kHz, ~28× at SF7; late SC lock reduces this further (see Training Accumulator risks) |
 | Frontend Buffer SRAM | 1 kB (2 × 512 B macros) | SF7 maximum with D=M at 8-bit storage; SF8+ requires more macros |
 | ΣΔ re-mod | 3rd order, single instance | SQNR > 100 dB at OSR=64 (500 kHz BW) — LoRa headroom > 70 dB |

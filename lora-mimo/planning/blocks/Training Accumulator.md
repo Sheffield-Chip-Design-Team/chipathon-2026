@@ -148,17 +148,19 @@ This is acceptable for the baseline implementation.
 
 ## Accumulator arithmetic
 
-Input samples are full-precision from the decimator (**not** the 8-bit saturated SRAM samples). Sample width is 12 or 16 bits per component (TBD).
+Input samples are **8-bit signed** from the decimator (**not** the SRAM-stored samples — both are 8-bit in this design, but the training accumulator reads the live decimator path, not SRAM).
 
 The cross-product `rx_j[n] · conj(rx_r[n])` produces:
 
-| Quantity | 12-bit input | 16-bit input | Type |
-|---|---|---|---|
-| Sample I or Q | ±2047 | ±32767 | int12 / int16 |
-| Cross-product component | ±2 × 2047² ≈ 8.4M | ±2 × 32767² ≈ 2.1G | int32 / int64 |
-| Z_j component (sum over ~320) | ≈ ±2.7G | ≈ ±670G | int32 (tight) / int64 |
+| Quantity | Value | Type |
+|---|---|---|
+| Sample I or Q | ±127 | int8 |
+| Cross-product component | ±2 × 127² ≈ 32K | int16 (fits int32) |
+| Z_j component (sum over ~640) | ≈ ±21M | fits int32 (max ±2.1G) |
 
-**Use int64 per accumulator component.** int64 covers both 12-bit and 16-bit inputs safely. At 12-bit the sum is borderline for int32; at 16-bit int32 overflows.
+**Use int32 per accumulator component.** With 8-bit inputs and N_acc up to 640 (16-symbol preamble, SC_HITS_REQ=2), Z_j ≤ 640 × 2 × 127² ≈ 20.6M — well within int32 range. int32 is sufficient with ~100× headroom.
+
+Total register cost: 4 branches × 2 components (I, Q) × 32 bits = **32 bytes** (halved from int64).
 
 Total register cost: 4 branches × 2 components (I, Q) × 64 bits = **64 bytes**.
 
@@ -173,12 +175,12 @@ The reference branch samples `rx_r[n]` must be buffered for one clock cycle so a
 | `clk` | in | 1 | 32 MHz | System clock |
 | `rst_n` | in | 1 | — | Active-low reset |
 | `iq_valid` | in | 1 | f_s | Sample strobe |
-| `raw_j[3:0]` | in | 4×2×W | f_s | Full-precision DC-removed samples from decimator (W = 12 or 16 bits per component) |
+| `raw_j[3:0]` | in | 4×2×8 | f_s | DC-removed samples from decimator (8-bit signed per I/Q component) |
 | `sc_lock` | in | 1 | per packet | Arms the accumulator |
 | `timing_ref` | in | 32 | per packet | Preamble-start sample index; defines acc_end |
 | `sf` | in | 3 | static | Spreading factor; sets M = 2^SF |
 | `ref_sel` | in | 2 | static | Reference branch index from `TACC_REF_SEL` register |
-| `Z_j[3:0]` | out | 4×2×64 | per packet | Complex cross-correlation estimates (I+Q, int64 per branch) |
+| `Z_j[3:0]` | out | 4×2×32 | per packet | Complex cross-correlation estimates (I+Q, int32 per branch) |
 | `E_ref` | out | 64 | per packet | Reference branch energy: `Σ\|rx_r[n]\|²` (int64, real). Used to recover absolute `\|h_j\|²` — see Recovering absolute channel magnitudes. |
 | `training_done` | out | 1 | per packet | Asserts when accumulation is complete; triggers weight gen |
 | `n_acc` | out | 10 | per packet | Number of samples accumulated (for weight gen normalisation) |
@@ -234,10 +236,55 @@ The reference branch samples `rx_r[n]` must be buffered for one clock cycle so a
 | CFO immunity — large | Inject ε = ±8.9 bins (±20 ppm / SF6) | Weight magnitudes identical to zero-CFO case; no Dirichlet attenuation |
 | CFO immunity — integer bin | Inject ε = ±1, ±2, … bins | No combining gain collapse; Z_j magnitude unaffected |
 | Accumulation window | Check sample count | `n_acc ≈ (8 - SC_HITS_REQ - 1) · M` |
-| Overflow check | Max-amplitude 16-bit input | No int64 overflow after n_acc samples |
+| Overflow check | Max-amplitude 8-bit input (±127) at N_acc=640 | Z_j component ≤ ±20.6M; no int32 overflow (100× headroom) |
 | Multi-branch | NR=4, independent h_j per branch | Z_j = h_j · conj(h_ref) · n_acc for each j |
 | Ref branch selection | Set ref_sel = 1, 2, 3 | Correct branch used as reference; other estimates rotate accordingly |
 | Weak reference | h_ref ≈ 0 (deep null) | Z_j near zero; weight gen falls back gracefully (SC selects best remaining) |
+
+---
+
+## Timing risks
+
+The training window is bounded by SC lock on one side and the end of the 8-symbol preamble on the other. Three conditions can compress or corrupt this window.
+
+### 1. Late SC lock at low SNR
+
+SC lock is not guaranteed at the first opportunity. At low SNR the Schmidl-Cox metric fluctuates below threshold for several symbol periods before consecutive hits accumulate. Simulation results at SF6, NR=4, `hits_req=2`, threshold=0.90:
+
+| SNR | Lock rate | Effect on N_acc |
+|---|---|---|
+| 20 dB | 100% | Always locks at 3M; full 5-symbol training |
+| 10 dB | 85% | Mean N_acc ≈ 5 symbols; ~1.4% of packets lock after 6M (< 2 symbols training) |
+| 6 dB | ~24% | High miss rate; when lock occurs it is often late |
+| ≤ 3 dB | < 1% | Essentially no lock |
+
+Training loss vs lock delay (SF6, N_acc referenced to ideal 5-symbol window):
+
+| Lock time | N_acc | Training loss |
+|---|---|---|
+| 3M (ideal) | 5M | 0 dB |
+| 5M | 3M | −2.2 dB |
+| 6M | 2M | −4.0 dB |
+| 7M | 1M | −7.0 dB |
+| 7.5M | 0.5M | −10.0 dB |
+
+**Mitigation:** the hardware combiner falls back to bypass (`w^H x → sign_extend(x[bypass_sel])`) until `W_valid` asserts. A late lock produces degraded weights rather than a broken receiver — the SX1302 continues seeing a valid single-antenna stream. No explicit guard needed; the fallback path handles it automatically.
+
+### 2. Short preamble
+
+LoRa allows preamble lengths shorter than the default 8 upchirps (minimum configurable). If a transmitter uses a 6-symbol preamble, `acc_end = timing_ref + 6M − 1` and `N_acc ≤ 3M` even with an ideal early lock — a −2.2 dB training loss from the baseline. The accumulator spec assumes 8 symbols; deployments with shorter preambles must reduce `SC_HITS_REQ` or accept the extra training loss.
+
+**Mitigation:** make `TACC_PREAMBLE_LEN` a configurable register (range 6–16 symbols) so `acc_end` tracks the actual preamble length rather than assuming 8. For the demo deployment, preamble length is set to 16 symbols, giving up to 13 symbols of training accumulation with `SC_HITS_REQ=2` — approximately +4 dB vs the 5-symbol baseline.
+
+### 3. First-packet saturation at maximum gain
+
+The AGC architecture prevents mid-training gain steps by design: new gain applies only at `safe_switch` (IDLE between packets), so training always accumulates under a fixed gain within a packet. There is no risk of a gain step corrupting `Z_j` mid-accumulation.
+
+The real risk is the **first packet after power-on or after a large path-loss change**. The SX1257 starts at maximum gain (LNA_G1, BB_MAX). If the received signal is strong, decimated samples will saturate before the AGC has had a chance to step gain down. Saturated samples in training produce a `Z_j` whose magnitude does not reflect the true channel — the weights derived from it will be wrong.
+
+The AGC fires at `CORR_LOCK` and queues a gain step to apply at the next IDLE boundary. The saturated first packet cannot be recovered, but the second packet runs at the corrected gain.
+
+**Mitigation:** the combiner falls back to bypass until `W_valid` asserts. A corrupted `Z_j` from a saturated first packet produces poor weights; the Packet Control FSM will not assert `W_valid` if weight generation detects an anomaly (or if firmware rejects it). The second packet then produces clean training under the corrected gain. No explicit guard in the training accumulator is needed — the existing bypass fallback and next-packet weight application cover this case.
 
 ---
 
@@ -247,7 +294,7 @@ The reference branch samples `rx_r[n]` must be buffered for one clock cycle so a
 - **Relative estimates only (combining).** `Z_j` estimates `h_j · conj(h_ref)`, not `h_j` independently. This is sufficient for MRC/EGC/SC combining. Absolute per-branch magnitude is recovered from `E_ref` — see Recovering absolute channel magnitudes. N0 bias in `E_ref` affects ALMMSE at low SNR; a separate noise-floor estimate is needed to debias for that use case.
 - **Weak reference degrades all estimates.** If `h_ref ≈ 0`, all `Z_j` are noise-dominated. Mitigated by static `TACC_REF_SEL` pointing to the best-known antenna for the deployment.
 - **Frontend-buffer limited, not accumulator-limited.** Accumulator register cost scales with NR only (not M). `SF6` is always supported with the baseline dedicated frontend SRAM path. `SF7` is supported only to the extent that the Frontend Buffer can supply the required delayed samples for the selected storage mode; if the optional CPU SRAM borrow path is unavailable, the intended fallback is `NR=2` acquisition at `SF7`.
-- **Sample width TBD.** int64 accumulators handle both 12-bit and 16-bit inputs. Once sample width is confirmed, the accumulator may be reducible to int32 (12-bit path only).
+- **int32 accumulators sufficient.** With 8-bit inputs and N_acc up to 640 (16-symbol preamble), Z_j ≤ ±20.6M — well within int32 (±2.1G). ~100× headroom.
 
 ---
 

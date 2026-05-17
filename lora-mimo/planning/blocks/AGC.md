@@ -116,6 +116,35 @@ The energy measurement must tap the **full-precision samples from the decimator 
 
 ---
 
+## Headroom constraint and ownership
+
+The AGC is the sole owner of the per-branch signal level constraint. No other block in the pipeline adjusts signal amplitude for headroom purposes — the combiner, weight generation, and re-modulator all assume the AGC has done its job.
+
+The end-to-end headroom chain is:
+
+```
+SX1257 gain (AGC-controlled)
+    ↓
+Decimator output — per-branch amplitude, int8
+    ↓
+MRC Combiner — coherently adds NR=4 branches: output amplitude ≤ √NR × per-branch = 2×;
+               ÷2 right-shift applied in MRC output stage → int8 output ≈ per-branch amplitude
+               (bypass path: int8 direct, no ÷2)
+    ↓
+ΣΔ Re-modulator — requires input < −3 dBFS for stability
+```
+
+The ÷2 shift in the combiner MRC output stage absorbs the worst-case √NR=4 combining gain. After the shift, the re-modulator input amplitude equals approximately the per-branch amplitude. The AGC target must therefore keep **per-branch signal amplitude below −3 dBFS** (≤ 90 counts for int8 full scale = 127, i.e. 0.707 × 127).
+
+This single constraint, if met by the AGC, simultaneously satisfies:
+- Combiner MRC output fits in int8 after ÷2 (with unit-norm weights: √NR × per-branch = 2 × 90 = 180 → ÷2 = 90 ≤ 127 ✓)
+- Bypass output fits in int8 directly (per-branch amplitude ≤ 90 ✓)
+- Re-modulator input below −3 dBFS stability limit
+
+**AGC_TARGET_HI must be calibrated on silicon to correspond to −3 dBFS per branch.** The current planning value (0x6000) is a placeholder and must be verified against actual decimator output levels and energy metric scaling.
+
+---
+
 ## Control policy
 
 Use BB gain for fine tracking and LNA gain for coarse correction.
@@ -130,8 +159,8 @@ Policy:
 Current thresholds:
 
 ```c
-#define AGC_TARGET_LO  0x0800   // too cold
-#define AGC_TARGET_HI  0x6000   // too hot
+#define AGC_TARGET_LO  0x0800   // too cold — TBD, calibrate on silicon
+#define AGC_TARGET_HI  0x6000   // too hot  — TBD, must correspond to −3 dBFS per branch
 #define AGC_SAT_GUARD  0xE000   // near saturation
 ```
 

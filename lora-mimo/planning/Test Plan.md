@@ -120,10 +120,10 @@
 
 ### Block 6 — ΣΔ Re-modulator ×2
 
-**Pass criterion:** Re-demodulated output (Python decimation of 1-bit re-mod stream) matches int16 input to within ±3 LSB RMS. In-band SQNR > 80 dB at full scale.
+**Pass criterion:** Re-demodulated output (Python decimation of 1-bit re-mod stream) matches int8 input to within ±1 LSB RMS. In-band SQNR > 40 dB at −6 dBFS (expected ~44 dB; 8-bit input limits effective SQNR regardless of OSR).
 
 **Method:**
-- Inject known int16 sine → capture 1-bit output → decimate in Python → compare to input
+- Inject known int8 sine at −6 dBFS → capture 1-bit output → decimate in Python → compare to input
 - Stability test: inject input at −3 dBFS and 0 dBFS (should clip/saturate not diverge)
 - Both re-mod instances tested independently and simultaneously
 

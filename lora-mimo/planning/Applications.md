@@ -37,7 +37,7 @@ SNR_out = (‖h[0..3]‖² + ‖h[4..7]‖²) / σ²
         = Σⱼ |hⱼ|² / σ²    for j = 0..7
 ```
 
-This equals the SNR of an ideal single-stage 8-antenna joint MRC processor. The cascade introduces no combining loss. The ΣΔ re-modulator's quantization noise (SQNR > 100 dB) is negligible relative to thermal noise.
+This equals the SNR of an ideal single-stage 8-antenna joint MRC processor. The cascade introduces no combining loss. The ΣΔ re-modulator's effective SQNR (~44 dB with 8-bit input after ÷2) is negligible relative to thermal noise at all LoRa operating SNRs (LoRa decodes well below 0 dB SNR).
 
 ### Why time alignment is preserved
 

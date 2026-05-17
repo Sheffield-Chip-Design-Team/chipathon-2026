@@ -29,7 +29,7 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x10` | `MIMO_CTRL` | R/W | `0xF0` | Control | [0] `MODE` (0=MRC, 1=passthrough); [7:4] `ANTENNA_EN` |
 | `0x11` | `SF_CFG` | R/W | `0x07` | Packet timing | [2:0] spreading-factor selector |
 | `0x12` | `DECIM_CFG` | R/W | `0x00` | ΣΔ Decimator | [1:0] decimation-ratio / output-bandwidth select |
-| `0x13` | `FRONTEND_CFG` | R/W | `0x00` | Frontend Buffer | [0] `STORE_W`; [1] `BIST_RUN`; [7:2] reserved |
+| `0x13` | `FRONTEND_CFG` | R/W | `0x00` | Frontend Buffer | [0] reserved; [1] `BIST_RUN`; [7:2] reserved |
 | `0x14` | `FRONTEND_STATUS` | R | `0x00` | Frontend Buffer | [1:0] `BUF_MODE`; [2] `BUF_VALID`; [3] `SRAM0_BIST_PASS`; [4] `SRAM1_BIST_PASS`; [5] `BUF_FREEZE`; [7:6] reserved |
 | `0x15` | `BUF_WR_PTR` | R | `0x00` | Frontend Buffer | [6:0] current write pointer mod 128; [7] `BUF_FREEZE` mirror |
 | `0x16` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Packet timeout in LoRa symbols |
@@ -161,7 +161,11 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0xC7` | `SC_LOCK_SNAP_2` | R | `0x00` | Schmidl-Cox | Lock sample-count snapshot [23:16] |
 | `0xC8` | `SC_LOCK_SNAP_1` | R | `0x00` | Schmidl-Cox | Lock sample-count snapshot [15:8] |
 | `0xC9` | `SC_LOCK_SNAP_0` | R | `0x00` | Schmidl-Cox | Lock sample-count snapshot [7:0] |
-| `0xCA`–`0xCF` | — | — | — | — | Reserved for bring-up-only observability |
+| `0xCA` | `SRAM_DUMP_CTRL` | R/W | `0x00` | Frontend Buffer | [0] `SRAM_DUMP_START` (write 1 to enter dump mode; only accepted in Locked state); [1] `SRAM_DUMP_DONE` (read-only; 1 = result valid) |
+| `0xCB` | `SRAM_DUMP_ADDR_HI` | R/W | `0x00` | Frontend Buffer | [0] byte address bit [8]; [1] macro select (0=SRAM0, 1=SRAM1); [7:2] reserved |
+| `0xCC` | `SRAM_DUMP_ADDR_LO` | R/W | `0x00` | Frontend Buffer | Byte address bits [7:0] (0–255 within each 256-byte half of the 512 B macro) |
+| `0xCD` | `SRAM_DUMP_DATA` | R | `0x00` | Frontend Buffer | Byte at `{DUMP_ADDR_HI[1], DUMP_ADDR_HI[0], DUMP_ADDR_LO}` in selected macro; valid after `SRAM_DUMP_DONE=1` |
+| `0xCE`–`0xCF` | — | — | — | — | Reserved for bring-up-only observability |
 | **Noise Floor Estimator** (`0xD0`–`0xDF`) | | | | | |
 | `0xD0` | `NFE_CTRL` | R/W | `0x04` | Noise Floor Estimator | [0] `SIGMA2_SRC`; [3:1] `NOISE_ALPHA_SHIFT`; [7:4] reserved |
 | `0xD1` | `NFE_STATUS` | R | `0x00` | Noise Floor Estimator | [0] `SIGMA2_VALID`; [7:1] reserved |
@@ -358,7 +362,7 @@ This configures `M = 2^SF` for the frontend buffer, SC detector, training accumu
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [0] | `STORE_W` | 0 = 8-bit saturated storage (default); 1 = 16-bit storage |
+| [0] | — | Reserved (was `STORE_W`; storage width fixed at 8-bit) |
 | [1] | `BIST_RUN` | Write 1 to trigger frontend SRAM BIST; self-clears |
 | [7:2] | — | Reserved |
 

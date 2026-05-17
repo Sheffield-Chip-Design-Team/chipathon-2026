@@ -80,8 +80,8 @@ graph LR
         subgraph combining["Weight Generation & MRC Combining"]
             direction LR
             WGEN["Weight Generation\nSHIFT→CAL→COMPUTE→SCALE\nHW: EGC/MRC/SC · SW: ALMMSE"]
-            COMB["MRC Combiner\nŷ[n] = w^H·x[n] per sample\ntime domain · int32→int16"]
-            REMOD_A["ΣΔ Re-mod\n3rd order · int16 → 1-bit"]
+            COMB["MRC Combiner\nŷ[n] = w^H·x[n] per sample\ntime domain · int32→int8 (÷2)"]
+            REMOD_A["ΣΔ Re-mod\n3rd order · int8 → 1-bit"]
             COMB --> REMOD_A
         end
 
@@ -290,7 +290,7 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | Pressure Point | Stage | Risk | Mitigation/Verification Requirement |
 | --- | --- | --- | --- |
 | **Decimator Droop** | Stage 2 | Band-edge roll-off | FIR coefficients must be tuned to `DECIM_CFG`; verify cumulative frequency response is flat ±0.5 dB. |
-| **Combiner Truncation** | Stage 8 | Signal clipping or quantization noise | Firmware scaling of `W` matrix must maximize `int16` headroom without hitting saturating thresholds. |
+| **Combiner Truncation** | Stage 8 | Signal clipping or quantization noise | Combiner outputs int8 (MRC: int32 ÷2 → int8; bypass: direct int8). AGC must keep per-branch amplitude ≤ −3 dBFS (≤ 90 counts int8) so combined output stays within int8 range after ÷2. Int8 saturation is a safety net only. |
 | **Re-modulator Stability** | Stage 9 | Integrator latch-up / Instability | Input must be strictly `< -3 dBFS`. Saturating adders are mandatory; wrap-around will cause permanent instability. |
 
 > **End-to-End Verification Requirement:** A 'bit-exactness' check is required. The RTL implementation must be validated against a high-precision Python reference model using test vectors across the full input dynamic range to ensure error-signal SNR reflects only LSB quantization and no correlated clipping artifacts.
