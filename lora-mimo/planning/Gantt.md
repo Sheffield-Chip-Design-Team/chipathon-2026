@@ -24,21 +24,21 @@ gantt
     Python golden reference model        :crit, vf1,  2026-05-09, 28d
 
     section DSP Implementation
-    ΣΔ Decimator ×4 (CIC + FIR)         :rx1,  2026-05-24, 21d
+    ΣΔ Decimator ×4 (CIC + FIR)         :rx1,  2026-05-17, 21d
+    ΣΔ Re-modulator ×2                   :rx6,  2026-05-17, 14d
     DC Removal ×4                        :rx0,  2026-05-24, 7d
     Energy Measurement (in SC path)     :rx2,  2026-05-24, 14d
     Correlator Bank ×8                   :crit, rx3,  2026-05-24, 28d
     Training Accumulator                 :crit, rx4,  2026-05-24, 21d
-    Weight Generation                    :crit, rx5,  2026-06-01, 14d
+    Weight Generation                    :crit, rx5,  2026-06-01, 21d
     Noise Floor Estimator                :rx7,  2026-06-01, 7d
-    ΣΔ Re-modulator ×2                   :rx6,  2026-05-24, 14d
 
     section Control Plane
     AHB-Lite Bus                         :cb4,  2026-05-24, 10d
     IRQ Controller                       :cb3,  2026-05-23, 7d
     SPI Master + Slave                   :cb1,  2026-05-17, 21d
     Packet Control FSM                   :cb5,  2026-05-24, 7d
-    PSRAM Controller                     :cb6,  2026-06-01, 14d
+    PSRAM Controller                     :cb6,  2026-06-15, 14d
     SRAM macro path                      :crit, cm1,  2026-05-24, 21d
     SRAM macro BIST                      :cm2,  2026-05-30, 7d
     PicoRV32 integration + arbiter       :crit, cm3,  2026-05-18, 21d
