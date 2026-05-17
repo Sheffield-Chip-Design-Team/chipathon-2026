@@ -33,8 +33,8 @@ import numpy as np
 from pathlib import Path
 from scipy import signal as sp_signal
 
-from .lora     import upchirp, demodulate
-from .receiver import estimate_channel, compute_weights, mrc_combine
+from sim.models.lora     import upchirp, demodulate
+from sim.models.receiver import estimate_channel, compute_weights, mrc_combine
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ def load_iq(path: str) -> np.ndarray:
         # interleaved real array
         return (data[0::2] + 1j * data[1::2]).astype(np.complex64)
 
-    if ext in (".cs16", ".s16"):
+    if ext in (".cs16", ".s16", ".iq"):
         raw = np.fromfile(p, dtype=np.int16)
         iq  = raw[0::2].astype(np.float32) + 1j * raw[1::2].astype(np.float32)
         return (iq / 32768.0).astype(np.complex64)
