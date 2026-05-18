@@ -590,6 +590,180 @@ Why it matters: gateway value should be measured in packet delivery and coverage
 
 ---
 
+## Coherent vs Non-Coherent Combining
+
+### Post-detection (non-coherent) MRC
+
+LoRa is a non-coherent modulation — `fft_demod` selects the peak chirp bin by energy, not phase. This means diversity combining can be done after the FFT instead of on IQ samples:
+
+```
+branch 0: IQ → de-chirp → |FFT|²  ─┐
+branch 1: IQ → de-chirp → |FFT|²  ─┤─ sum → argmax → symbol
+branch 2: IQ → de-chirp → |FFT|²  ─┘
+```
+
+Advantages over coherent MRC:
+- No inter-branch phase alignment needed — eliminates training accumulator and weight generation blocks entirely
+- No preamble required — works from the first symbol
+- Robust to fast fading (channel changes within packet don't corrupt the estimate)
+- ASIC: adder tree on FFT magnitudes only — significantly less silicon
+
+Cost: ~1.5–2 dB SNR penalty vs coherent MRC at NR=4 (provably optimal gap). Negligible at comfortable link margins; matters only near sensitivity floor.
+
+**When to prefer:** Dense deployments at normal link margins where simplicity and robustness to mobility outweigh the ~2 dB gain.
+
+### Coherent MRC advantages
+
+Coherent combining is the provably optimal combiner (maximises post-combining SNR). Key advantages that post-detection cannot replicate:
+
+- **Full ~10·log₁₀(NR) dB diversity gain** — at NR=4, full 6 dB vs ~4.5 dB non-coherent
+- **Null steering** — complex weights can place spatial nulls toward interferers. NR=4 gives 3 degrees of freedom: 1 main beam + 3 nulls. Post-detection has no mechanism for this.
+- **Beamforming** — if antennas are physically spaced (~17 cm half-wavelength at 868 MHz), the training-estimated weight vector `w_j = conj(h_j)/Σ|h_k|²` already steers toward the transmitter implicitly. No explicit DOA block needed.
+- **EGC/SC fallback** — once complex weights exist, switching between MRC/EGC/SC is a software policy. Post-detection has no SC equivalent.
+- **Multi-node spatial multiplexing** — see below.
+
+**When to prefer:** Range extension at sensitivity floor, interference-limited environments, or when beamforming / null steering is a target.
+
+---
+
+## Spatial Processing Extensions
+
+### Beamforming and null steering
+
+The current MRC weight vector `w = conj(h)/Σ|h|²` is equivalent to matched-filter beamforming when the channel vector encodes the array steering response. With physically spaced antennas:
+
+- **Implicit steering:** training accumulator already estimates the complex `h_j` per branch, which includes the phase gradient across the array. The resulting `w_j` steers the beam toward the source automatically, no DOA block needed.
+- **Explicit null steering:** replace `w = conj(h)/Σ|h|²` with an MVDR/LCMV weight vector that maximises SINR subject to a gain constraint toward the desired node. Needs an interference covariance estimate (from the noise floor samples between packets).
+- **DOA estimation:** add a MUSIC or ESPRIT block upstream of weight generation to estimate angle of arrival from the preamble-derived `h_j`. Useful for diagnostics or for initialising explicit beamforming.
+
+ASIC impact: null steering requires a matrix inversion (NR×NR, complex) — feasible for NR=4 on PicoRV32 firmware but not real-time in hardware. Weight update latency would increase from one preamble to a few preambles.
+
+### Multi-node spatial multiplexing
+
+With NR=4 receive antennas and K simultaneous nodes on the same frequency/SF, the gateway can spatially separate them if their channel vectors `h_k` are sufficiently distinct (K < NR):
+
+```
+y = H·s + n    (NR×K channel matrix, K transmit nodes)
+ŝ = W·y        (K×NR combining matrix)
+```
+
+Combining strategies:
+- **Zero-forcing (ZF):** `W = (H^H H)^-1 H^H` — perfect inter-node cancellation, noise enhancement at low SNR
+- **MMSE:** `W = (H^H H + σ²I)^-1 H^H` — trades off cancellation vs noise, better at low SNR
+- **Successive interference cancellation (SIC):** decode strongest node first, subtract, repeat
+
+For LoRa specifically, `H` must be estimated from simultaneous preambles — requires the two nodes to transmit at the same time (collision), which means this is a collision-resolution technique, not a scheduled SDMA scheme.
+
+**Practical path:** capture all NR×M preamble samples as now, but estimate `H` as a matrix rather than a vector. Weight generation block computes `W = MMSE(H)`. Same SRAM and FFT infrastructure; firmware complexity increases.
+
+**SNR condition for K=2, NR=4:** spatial separation requires `|H^H_0 H_1| / (|H_0| |H_1|) < 0.7` (correlation below ~0.7). In Rayleigh fading this holds with ~80% probability for isotropic antennas at half-wavelength spacing.
+
+**When useful:** high-density deployments where the same SF/BW is shared by many nodes and collisions are frequent. Gateway can resolve 2–3 simultaneous packets without requiring TDMA coordination.
+
+### Hardware requirements for beamforming and null steering
+
+Not currently spec'd. Summary of what is and isn't needed:
+
+**1. Antenna geometry — PCB/mechanical (the binding constraint)**
+
+Current design does not specify antenna spacing. For spatial beamforming and null steering to work:
+
+- Half-wavelength spacing at 868 MHz = 17.3 cm between elements
+- 4-element linear array: 3 × 17.3 cm ≈ 52 cm total — long PCB or separate antenna board with coax runs
+- 4-element circular array: ~11 cm radius — more symmetric azimuth coverage
+- Without defined spacing the weights still provide diversity gain (MRC), but the beam pattern is undefined and nulls cannot be directed to a specific angle
+
+**This has to be decided before PCB layout.** It affects enclosure design and is the hardest constraint to retrofit.
+
+**2. PLL startup phase calibration — firmware only, no new RTL**
+
+SX1257 PLLs lock to a random phase on each power-up. MRC training absorbs this per-packet (h_j includes PLL phase). For directed beamforming toward a known angle without a training signal, the static inter-antenna LO phase offset must be known.
+
+Fix: one-time calibration mode. Inject a CW tone from a known direction (or via a splitter), capture h_j, subtract the geometric phase → measure and store φ_PLL_j per antenna. The Frontend Calibration Procedure already describes this measurement flow.
+
+ASIC change: 4 × 16-bit per-antenna phase offset registers in the Register Map. No new RTL blocks.
+
+**3. Interference covariance for MVDR null steering — firmware only**
+
+MVDR null steering replaces the MRC weight formula with:
+
+```
+w_MVDR = R_n⁻¹ · h / (h^H · R_n⁻¹ · h)
+```
+
+`R_n` is the NR×NR interference covariance estimated from the noise-only samples before the preamble — already held in PSRAM capture. A 4×4 complex matrix = 128 bytes, trivially fits in PicoRV32 DMEM. 4×4 complex Gaussian elimination ≈ 200 MACs ≈ 20 µs at 32 MHz, well within budget.
+
+ASIC change: one register or FSM pointer to mark the noise-only window in PSRAM. No new RTL accumulator; PicoRV32 firmware reads the window and computes R_n and its inverse.
+
+**4. Summary — what changes where**
+
+| Change | Where | Cost |
+|---|---|---|
+| Antenna spacing and array topology | PCB layout / mechanical | Design constraint — must decide before layout |
+| Per-antenna LO phase calibration register | Register Map | 4 × 16-bit entries |
+| Noise-only window pointer | Packet Control FSM | 1 register, minor FSM state |
+| R_n accumulation and 4×4 matrix inversion | PicoRV32 firmware | Software only |
+| MVDR weight computation | PicoRV32 firmware | Replaces existing MRC formula |
+
+The weight registers and combiner are unchanged — whether the weights implement MRC or MVDR is entirely a firmware decision.
+
+**5. What requires additional hardware beyond the current spec**
+
+- Real-time null steering (update weights faster than once per packet): needs a hardware covariance accumulator and dedicated MAC units — not feasible in current architecture
+- DOA estimation (MUSIC / ESPRIT): significant new hardware, not justified for LoRa
+- Transmit beamforming: RX-only chip; would require a PA array and analogue phase shifters
+
+**Recommended action:** decide antenna array geometry (linear vs circular, spacing) before PCB layout. Add 4 calibration registers to the Register Map. Note noise-window pointer requirement in the Packet Control FSM spec.
+
+### ASIC cascade for array expansion
+
+Not yet considered in the planning docs. Two distinct interpretations:
+
+**1. Parallel cascade (array expansion)**
+
+Each ASIC handles NR=4 antennas; multiple ASICs feed a second-stage combiner:
+
+```
+ASIC 0: ant 0–3  → combined_0 ─┐
+ASIC 1: ant 4–7  → combined_1 ─┤─ ASIC_N → final output
+ASIC 2: ant 8–11 → combined_2 ─┘
+```
+
+Gets to NR=8, 12, 16 with a small number of chips. The second-stage ASIC runs the training accumulator on the combined inputs from the first-stage chips, treating each as a new "antenna branch." This works as long as all chips share a common clock reference (same board, same TCXO) — the inter-chip phase is then determined by propagation geometry and is recoverable from the preamble cross-correlation in the normal way.
+
+If chips are on different boards or at different locations, a timing/phase distribution network is needed (GPS-disciplined clock or white-rabbit style sync).
+
+**2. Serial pipeline**
+
+ASIC 1 output feeds ASIC 2 input as a processed stream — e.g. MRC-combined IQ feeds a second chip for further processing such as CFO correction, matched filtering, or symbol decisions. Less compelling since the current design already outputs decoded bits. More relevant if the first chip is used purely as a front-end combiner with no decode, and the second chip handles all baseband.
+
+**What the current ASIC is missing for cascading:**
+
+- No high-speed digital IQ output port — SPI/I2C only
+- No defined inter-chip sample format or clock export pin
+- No second-stage input mode (accepting a combined stream as one of NR branches rather than a raw ADC input)
+
+**The practical near-term case:**
+
+Two chips on the same PCB sharing the TCXO, giving NR=8. The second chip needs:
+1. A digital IQ input path that bypasses the analogue front-end for its branch 0 slot
+2. A clock input pin tied to the first chip's clock output
+3. The training accumulator running normally on all 4 inputs (3 raw ADC + 1 from chip 0 combined output)
+
+This is a pin and interface design question more than a DSP question — the combining algorithm is unchanged.
+
+**SNR implication:**
+
+Hierarchical two-stage MRC is not equivalent to flat NR=8 MRC. The first stage combines 4 branches and outputs one stream; the second stage sees this as a single (stronger) branch plus 3 more. The diversity order is still 4 (first stage) × 2 (stages) in the best case, not 8. Full NR=8 flat MRC requires all 8 branch signals to reach a single combiner simultaneously.
+
+For the parallel cascade to achieve near-flat-MRC performance, the first-stage combined outputs should be passed as raw per-branch signals rather than a single combined stream — i.e. chip 0 exports all 4 of its sat-output branches, not just the MRC result. This requires a 4× wider inter-chip interface but preserves the full NR=8 combining gain at the second stage.
+
+**Recommended next step:**
+
+Add an inter-chip digital interface to the pinout exploration (4× complex sample lanes, shared clock, frame sync). Simulate hierarchical vs flat combining gain to quantify the penalty of the two-stage approach and decide whether the interface complexity of exporting 4 branches per chip is justified.
+
+---
+
 ## Fixed-Point Analysis
 
 ### Wordwidth sweep
