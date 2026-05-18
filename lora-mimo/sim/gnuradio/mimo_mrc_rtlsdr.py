@@ -92,60 +92,65 @@ class MIMOMRCRTLSDRFlowgraph(gr.top_block):
         # ------------------------------------------------------------------
         # Stage 3+4: DC Removal + 8-bit saturation on live branch
         # ------------------------------------------------------------------
-        self.dc0  = DCRemovalBlock(alpha_shift=8)
-        self.sat0 = Saturate8BitBlock(scale=sat_scale)
-        self.connect(self.rtlsdr, self.dc0, self.sat0)
-
         # ------------------------------------------------------------------
-        # Simulated extra branches (NR-1) via channel_model on the same source
+        # Simulated NR branches via channel_model — ALL branches go through
+        # channel_model (including branch 0) so group delay is identical and
+        # coherent MRC combining is aligned. Branch 0 uses h=1+0j (unity).
         # ------------------------------------------------------------------
         if NR > 1:
-            h_extra = rician_coefficients(NR - 1, K=0.0, pll_phase_random=True)
-            h_extra = h_extra / np.sqrt(np.mean(np.abs(h_extra) ** 2))
-            noise_v = 10 ** (-snr_db / 20.0)
-            print(f"Simulated branches |h_j| = {np.abs(h_extra).round(3)}")
+            h_all = rician_coefficients(NR - 1, K=0.0, pll_phase_random=True)
+            h_all = h_all / np.sqrt(np.mean(np.abs(h_all) ** 2))
+            h_all = np.concatenate([[1.0 + 0j], h_all])  # branch 0 = unity
+        else:
+            h_all = np.array([1.0 + 0j])
 
-            self.ch_extra  = []
-            self.dc_extra  = []
-            self.sat_extra = []
-            for j in range(NR - 1):
-                cm = channels.channel_model(
-                    noise_voltage=noise_v,
-                    frequency_offset=0.0,
-                    epsilon=1.0,
-                    taps=[complex(h_extra[j])],
-                    noise_seed=j + 1,
-                    block_tags=True,
-                )
-                dc  = DCRemovalBlock(alpha_shift=8)
-                sat = Saturate8BitBlock(scale=sat_scale)
-                self.ch_extra.append(cm)
-                self.dc_extra.append(dc)
-                self.sat_extra.append(sat)
-                self.connect(self.rtlsdr, cm, dc, sat)
+        noise_v = 10 ** (-snr_db / 20.0)
+        print(f"Channel  |h_j| = {np.abs(h_all).round(3)}")
 
-        # Convenience list: sat output per branch (branch 0 = live RTL-SDR)
-        sat_branches = [self.sat0] + (self.sat_extra if NR > 1 else [])
+        self.ch  = []
+        self.dc  = []
+        self.sat = []
+        for j in range(NR):
+            cm = channels.channel_model(
+                noise_voltage=noise_v if j > 0 else 0.0,  # no extra noise on live branch
+                frequency_offset=0.0,
+                epsilon=1.0,
+                taps=[complex(h_all[j])],
+                noise_seed=j,
+                block_tags=True,
+            )
+            dc  = DCRemovalBlock(alpha_shift=8)
+            sat = Saturate8BitBlock(scale=sat_scale)
+            self.ch.append(cm)
+            self.dc.append(dc)
+            self.sat.append(sat)
+            self.connect(self.rtlsdr, cm, dc, sat)
+
+        # Bypass mode: skip channel_model entirely for single live branch
+        if weight_mode == "bypass" or NR == 1:
+            self.dc0  = DCRemovalBlock(alpha_shift=8)
+            self.sat0 = Saturate8BitBlock(scale=sat_scale)
+            self.connect(self.rtlsdr, self.dc0, self.sat0)
+
+        sat_branches = self.sat
 
         # ------------------------------------------------------------------
         # MRC combining
         # ------------------------------------------------------------------
         if weight_mode == "bypass" or NR == 1:
-            # Single live branch — no combining, pass straight through
+            # Single live branch — bypass channel_model, pass straight through
             self.combiner = MRCCombiner(1)
-            self.connect(sat_branches[0], (self.combiner, 0))
-            # Discard extra simulated branches if any
-            for j in range(1, NR):
+            self.connect(self.sat0, (self.combiner, 0))
+            # Discard all channel_model branches
+            for j in range(NR):
                 self.connect(sat_branches[j],
                              blocks.null_sink(gr.sizeof_gr_complex))
 
         elif weight_mode == "oracle":
-            h_all = np.ones(NR, dtype=complex)
-            h_all[1:] = h_extra if NR > 1 else []
             S = float(np.sum(np.abs(h_all) ** 2))
             w_oracle = np.conj(h_all) / S
             w_scaled = w_oracle / sat_scale
-            print(f"Oracle |w_j| = {np.abs(w_oracle).round(3)}")
+            print(f"Oracle   |w_j| = {np.abs(w_oracle).round(3)}")
 
             self.weighted = []
             for j in range(NR):
@@ -156,7 +161,7 @@ class MIMOMRCRTLSDRFlowgraph(gr.top_block):
             for j in range(NR):
                 self.connect(self.weighted[j], (self.combiner, j))
 
-        else:  # training
+        else:  # training — all branches through channel_model, timing aligned
             self.mrc_weights = MRCWeightBlock(
                 NR=NR, M=M_eff, preamble_len=preamble_len,
                 ref_sel=ref_sel, mode=combining_mode, sat_scale=sat_scale,
