@@ -23,7 +23,7 @@ If the optional PSRAM same-packet path is enabled, the FSM also decides whether 
 
 - stay on the baseline live/bypass flow
 - start PSRAM buffering at `sc_lock`
-- switch the combiner input to PSRAM replay at payload entry
+- switch the SX1302-facing output from zeros to PSRAM replay once `W_commit` arrives
 - drain buffered packet tail after `packet_end`
 
 ---
@@ -142,13 +142,14 @@ When `PSRAM_EN=1`, the FSM commands the [PSRAM Buffer Controller](PSRAM%20Buffer
 | FSM event | PSRAM action |
 |---|---|
 | `IDLE -> PREAMBLE_ACQ` | Assert `psram_packet_arm`; begin buffering at `sc_lock` |
-| Compute `payload_start_estimate` | Load `payload_rd_base = payload_start_estimate - sc_lock_time` |
-| `W_commit` before payload entry | Assert `psram_replay_start`; combiner input selects replay stream in `PAYLOAD_ACTIVE` |
-| `W_commit` after payload entry | Do not start replay; keep live path for this packet and queue W for next packet |
+| `W_commit` during BUFFERING and before `packet_end` | Assert `psram_replay_start`; PSRAM controller switches SX1302 input from zeros to delayed replay |
+| `W_commit` after `packet_end` | Replay for the current packet is impossible; queue W for the next packet |
 | `packet_end` while replay active | Allow PSRAM controller `DRAIN` phase, then return to live path in `IDLE` |
 | Timeout / abort | Assert `psram_abort`; fall back to baseline next-packet behaviour |
 
 The replay path is optional and default-off. With `PSRAM_EN=0`, all outputs above remain inactive and the FSM behaviour is identical to the baseline next-packet design.
+
+Unlike the baseline live path, PSRAM replay does **not** require `W_commit` before the live payload boundary. During BUFFERING the SX1302-facing output is forced to zero, so the current packet is not exposed downstream until replay begins. The practical PSRAM deadline is therefore `packet_end`, not `payload_start_estimate`.
 
 ---
 
@@ -172,7 +173,7 @@ The replay path is optional and default-off. With `PSRAM_EN=0`, all outputs abov
 | `pkt_timeout_syms` | in | 8 | Max packet length in symbols (register-configurable) |
 | `safe_switch` | out | 1 | Receiver idle; W/mode/antenna active banks may update |
 | `W_valid_set` | out | 1 | Strobe: commit W_SHADOW → W_ACTIVE |
-| `W_missed_packet` | out | 1 | Sticky: W not ready before payload; cleared on next sc_lock |
+| `W_missed_packet` | out | 1 | Sticky: baseline path missed payload deadline, or PSRAM path missed `packet_end`; cleared on next sc_lock |
 | `combiner_source` | out | 1 | 0=bypass, 1=W_ACTIVE |
 | `psram_packet_arm` | out | 1 | Start per-packet PSRAM buffering at `sc_lock` |
 | `psram_replay_start` | out | 1 | Start PSRAM replay from `payload_rd_base` |
@@ -237,11 +238,11 @@ See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the EMA block spec
 | Test | Method | Pass criterion |
 |---|---|---|
 | Normal lock and train | Inject sc_lock → training_done → W_commit in sequence | FSM traverses all states; W_valid_set asserts in IDLE; combiner uses W_ACTIVE on next packet |
-| W on time | W_commit before payload start | W_MISSED_PACKET=0; W_ACTIVE valid for current packet if between packets |
+| W on time | W_commit before payload start | W_MISSED_PACKET=0; W_ACTIVE valid for current packet in baseline live mode |
 | W late (next-packet) | W_commit during PAYLOAD_ACTIVE | W_MISSED_PACKET=1; combiner stays bypass this packet; W_ACTIVE updated at IDLE |
-| PSRAM replay on time | `PSRAM_EN=1`, `W_commit` before payload start | `psram_replay_start` asserts once; combiner input switches to replay in `PAYLOAD_ACTIVE` |
+| PSRAM replay on time | `PSRAM_EN=1`, `W_commit` before `packet_end` | `psram_replay_start` asserts once; SX1302 output switches from zeros to replayed packet stream |
 | PSRAM disabled | `PSRAM_EN=0` for full packet | `psram_packet_arm/replay_start` never assert; behaviour matches baseline next-packet path |
-| PSRAM late replay | `PSRAM_EN=1`, `W_commit` after payload entry | Replay never starts; packet stays live/bypass; W queued for next packet |
+| PSRAM late replay | `PSRAM_EN=1`, `W_commit` after `packet_end` | Replay for that packet never starts; W queued for next packet |
 | Training timeout | training_done never asserts | Preamble timeout fires; FSM enters PAYLOAD_ACTIVE in bypass; W_MISSED_PACKET=1 |
 | Packet timeout | New sc_lock never arrives | PKT_TIMEOUT_SYMS expires; FSM returns to IDLE |
 | Back-to-back packets | Two sc_locks in rapid succession | First sc_lock ends current packet (IDLE); second sc_lock immediately enters PREAMBLE_ACQ |

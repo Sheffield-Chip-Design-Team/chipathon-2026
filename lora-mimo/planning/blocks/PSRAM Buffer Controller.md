@@ -18,6 +18,132 @@ When `PSRAM_EN=0` (default) the block tristates all QPI data pins and the system
 
 ---
 
+## Additional functionality enabled by PSRAM
+
+Because the PSRAM path stores packet samples rather than acting only as a live delay line, it enables several capabilities beyond the minimum same-packet replay requirement.
+
+### 1. Extended training windows
+
+In baseline live mode, the training accumulator stops at preamble end so weights are ready before live payload. With PSRAM replay, the estimator window may extend later into the packet:
+
+```
+Z_j = Σ_n rx_j[n] · conj(rx_r[n])
+```
+
+Since the branch-reference estimator depends on the common packet samples rather than a local chirp template, a larger accumulation window can improve estimate SNR when the channel is approximately constant over the packet.
+
+### 2. Longer noise-estimation windows
+
+PSRAM allows firmware or hardware to estimate noise over a longer quiet interval than the small on-chip acquisition window:
+
+```
+N0_hat_j = (1/N) · Σ_{n in W_noise} |rx_j[n]|²
+```
+
+This lowers noise-estimation variance and improves:
+
+- ALMMSE / noise-aware weighting
+- branch-health metrics
+- signal-to-noise confidence measurements
+
+The selected noise window must be classified as signal-free; otherwise the estimate is biased by packet energy or interference.
+
+### 3. Multi-window channel-stability checks
+
+A stored packet can be split into multiple estimation regions:
+
+```
+Z_j^(1) = Σ_{n in W1} rx_j[n] · conj(rx_r[n])
+Z_j^(2) = Σ_{n in W2} rx_j[n] · conj(rx_r[n])
+```
+
+Comparing `Z_j^(1)` and `Z_j^(2)` provides a direct packet-level test of the constant-channel assumption. If the channel estimate drifts across windows, firmware can prefer an earlier window or reduce trust in the combined result.
+
+### 4. Offline combiner comparison on identical packets
+
+The same buffered packet can be replayed through several combining laws:
+
+```
+y_SC[n], y_EGC[n], y_MRC[n], y_ALMMSE[n]
+```
+
+This is valuable for algorithm validation because every method is tested on the exact same received data, not on different over-the-air packets.
+
+### 5. Adaptive reference-branch selection
+
+The current training path uses a nominated reference branch. With full packet storage, firmware can evaluate branch quality first and then choose the reference branch that maximises training robustness, for example:
+
+```
+r* = argmax_j Σ_{n in W} |rx_j[n]|²
+```
+
+This reduces the probability that all `Z_j` estimates are degraded by a weak or faded reference antenna.
+
+### 6. Post-lock packet validation and timing analysis
+
+Although the active path uses `sc_lock` plus back-calculated `timing_ref`, PSRAM allows the packet to be inspected after capture without extending the critical path. This supports:
+
+- checking whether `sc_lock` was a true preamble hit
+- measuring `timing_ref` error against offline analysis
+- studying late-lock cases and acquisition margin
+- testing whether longer training windows materially improve the estimate
+
+### 7. Packet-failure capture for bring-up and debug
+
+PSRAM can preserve raw multi-branch packet captures associated with:
+
+- false locks
+- missed locks
+- saturated first packets
+- weak-reference events
+- weight-commit misses
+- bad SX1302 decodes after combining
+
+This is one of the highest-value bring-up features because problematic packets can be replayed or analysed offline rather than reproduced over the air.
+
+### 8. Calibration and mismatch characterisation
+
+Stored raw packet data provides a direct way to inspect per-branch gain, phase, clipping, and timing behaviour across real packets. This is useful for:
+
+- branch-to-branch phase/gain mismatch analysis
+- validating calibration coefficients
+- detecting front-end asymmetry or clipping
+- comparing on-chip estimates with Python / GNU Radio post-processing
+
+### 9. Multi-packet or long-term statistics
+
+The PSRAM device is much larger than the minimum depth required for a single SF6/SF7 delay line, so the architecture can support capture of multiple packet segments or extended quiet regions when useful. This enables:
+
+- long-window idle-noise collection
+- packet-to-packet estimate smoothing
+- debug snapshots before and after anomalous events
+
+### Practical prioritisation
+
+Recommended first-use priorities:
+
+1. same-packet replay
+2. raw packet capture for debug
+3. longer noise-estimation windows
+4. extended training windows in PSRAM mode
+5. multi-window channel-stability checks
+
+Nice-to-have follow-ons:
+
+1. adaptive reference-branch selection
+2. offline combiner comparison
+3. longer-term multi-packet statistics
+
+The key architectural point is:
+
+```
+PSRAM != only a delay line
+```
+
+It creates a packet-memory subsystem that decouples capture time from estimation time and replay time.
+
+---
+
 ## Operating principle
 
 During BUFFERING the SX1302-facing output is silenced (zeros). At `W_commit` the controller switches to REPLAY: it reads from `buf_base` (the sc_lock position), MRC-combines the data, and writes to SX1302. Both `rd_ptr` and `wr_ptr` advance on every `iq_valid` at 125 kS/s. Because both advance at the same rate, the gap between them remains fixed at 8M+50 samples for the rest of the packet. PSRAM acts as a fixed delay line: SX1302 receives the MRC-combined signal continuously delayed by 8M+50 samples relative to real time. REPLAY runs until `packet_end`, at which point the controller returns to IDLE.

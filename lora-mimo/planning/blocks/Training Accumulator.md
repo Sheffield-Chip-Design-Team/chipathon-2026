@@ -121,28 +121,67 @@ The second identity follows from `|Z_j| ≈ |h_j| · |h_r| · N_acc`, so `|Z_j|�
 
 SC lock fires approximately `(SC_HITS_REQ + 1) · M` samples after the preamble start (symbol 0). At that point, `timing_ref` is back-calculated to symbol 0.
 
-The training accumulator is **armed on `sc_lock`**. It accumulates from the current sample (lock time) through `timing_ref + 8M - 1` (end of the 8-symbol preamble window).
+The training accumulator is **armed on `sc_lock`**. It always starts from the current sample (lock time), but the accumulation end point depends on whether the packet is being processed in the baseline live path or in the optional PSRAM replay path.
+
+### Baseline live path (`PSRAM_EN = 0`)
+
+In the baseline path, weights must be ready before the live payload reaches the combiner. The accumulator therefore stops at the end of the configured preamble:
 
 ```
 acc_start  = sc_lock_sample
-acc_end    = timing_ref + 8·M - 1
+acc_end    = timing_ref + PREAMBLE_LEN·M - 1
 N_acc      = acc_end - acc_start + 1
-           ≈ (8 - SC_HITS_REQ - 1) · M
+           ≈ (PREAMBLE_LEN - SC_HITS_REQ - 1) · M
 ```
 
-With `SC_HITS_REQ = 2` and SF6 (M=64): `N_acc ≈ 5 · 64 = 320 samples` (symbols 3–7).
+With the default `PREAMBLE_LEN = 8`, `SC_HITS_REQ = 2`, and SF6 (M=64):
+
+```
+N_acc ≈ 5 · 64 = 320 samples
+```
+
+This is the existing next-packet / live-same-packet timing model: stop at preamble end so `training_done` leaves the full sync/SFD interval available for weight commit before the payload.
+
+### PSRAM replay path (`PSRAM_EN = 1`)
+
+In the PSRAM path, SX1302 sees zeros during BUFFERING and the buffered packet is replayed only after `W_commit`. There is therefore no requirement for `training_done` to occur before the **live** payload boundary. The accumulator may extend beyond the preamble and use a larger portion of the packet:
+
+```
+acc_start  = sc_lock_sample
+acc_end    = packet_end_estimate - TACC_GUARD
+N_acc      = acc_end - acc_start + 1
+```
+
+where `TACC_GUARD` is a small programmable margin reserved for:
+
+- final accumulator latch / `training_done`
+- weight-generation latency
+- replay-control switching before `packet_end`
+
+This mode exploits the branch-to-branch cross-correlation property
+
+```
+Z_j = Σ_n rx_j[n] · conj(rx_r[n])  ≈  h_j · conj(h_r) · Σ_n |s[n]|²
+```
+
+which does not require chirp-template alignment and remains valid over any packet region where:
+
+- both branches observe the same transmitted samples
+- the channel is approximately constant over the accumulation window
+
+For the target deployment (`SF6`/`SF7` only), that constant-channel assumption is considered reasonable over a packet.
 
 `training_done` asserts when the sample counter reaches `acc_end`.
 
 ### Known limitation: early preamble symbols are missed
 
-Symbols 0 through `SC_HITS_REQ` (approximately the first 2–3 symbols) have passed before `sc_lock` asserts and cannot be accumulated. The training gain is therefore:
+Symbols 0 through `SC_HITS_REQ` (approximately the first 2–3 symbols) have passed before `sc_lock` asserts and cannot be accumulated. In the baseline live path, the training gain is therefore:
 
 ```
 10 · log10(N_acc / 8M)  ≈  −2 dB   (for SC_HITS_REQ = 2, SF6)
 ```
 
-This is acceptable for the baseline implementation.
+This is acceptable for the baseline implementation. In PSRAM mode the same early-symbol loss still occurs, but it can be offset by extending the accumulation window beyond the preamble.
 
 ---
 
@@ -177,9 +216,11 @@ The reference branch samples `rx_r[n]` must be buffered for one clock cycle so a
 | `iq_valid` | in | 1 | f_s | Sample strobe |
 | `raw_j[3:0]` | in | 4×2×8 | f_s | DC-removed samples from decimator (8-bit signed per I/Q component) |
 | `sc_lock` | in | 1 | per packet | Arms the accumulator |
-| `timing_ref` | in | 32 | per packet | Preamble-start sample index; defines acc_end |
+| `timing_ref` | in | 32 | per packet | Preamble-start sample index; defines `acc_end` in baseline live mode |
+| `packet_end_estimate` | in | 32 | per packet | Latest allowed accumulation boundary for PSRAM replay mode |
 | `sf` | in | 3 | static | Spreading factor; sets M = 2^SF |
 | `ref_sel` | in | 2 | static | Reference branch index from `TACC_REF_SEL` register |
+| `psram_en` | in | 1 | static | 0 = baseline live path, 1 = extended PSRAM replay path |
 | `Z_j[3:0]` | out | 4×2×32 | per packet | Complex cross-correlation estimates (I+Q, int32 per branch) |
 | `E_ref` | out | 64 | per packet | Reference branch energy: `Σ\|rx_r[n]\|²` (int64, real). Used to recover absolute `\|h_j\|²` — see Recovering absolute channel magnitudes. |
 | `training_done` | out | 1 | per packet | Asserts when accumulation is complete; triggers weight gen |
@@ -206,7 +247,10 @@ The reference branch samples `rx_r[n]` must be buffered for one clock cycle so a
    - `E_ref` shares the reference branch sample already buffered for the cross-multipliers — no extra memory reads
 
 4. **Window controller**
-   - Tracks `acc_start` (latched at `sc_lock`) and `acc_end` (= `timing_ref + 8M - 1`)
+   - Tracks `acc_start` (latched at `sc_lock`)
+   - Computes `acc_end` from the active packet path:
+     - baseline live path: `timing_ref + PREAMBLE_LEN·M - 1`
+     - PSRAM replay path: `packet_end_estimate - TACC_GUARD`
    - Gates accumulator enable between these bounds
    - Asserts `training_done` and latches `n_acc` when `acc_end` is reached
 
@@ -216,13 +260,16 @@ The reference branch samples `rx_r[n]` must be buffered for one clock cycle so a
 
 ```
 1. sc_lock asserts at sample N_lock.
-2. acc_start = N_lock. acc_end = timing_ref + 8M - 1.
-3. Accumulator resets: Z_j[0..3] = 0.
-4. Reference branch latched from raw_j[ref_sel].
-5. Each iq_valid: d_j = raw_j[j] · conj(rx_r); Z_j += d_j.
-6. At sample acc_end: training_done asserts. Z_j and n_acc are latched.
-7. Weight gen reads Z_j[0..3] and computes W = conj(Z_j) / S.
-8. Accumulator idles until next sc_lock.
+2. acc_start = N_lock.
+3. acc_end is selected by mode:
+   - baseline live path: `timing_ref + PREAMBLE_LEN·M - 1`
+   - PSRAM replay path: `packet_end_estimate - TACC_GUARD`
+4. Accumulator resets: Z_j[0..3] = 0.
+5. Reference branch latched from raw_j[ref_sel].
+6. Each iq_valid: d_j = raw_j[j] · conj(rx_r); Z_j += d_j.
+7. At sample acc_end: training_done asserts. Z_j and n_acc are latched.
+8. Weight gen reads Z_j[0..3] and computes W = conj(Z_j) / S.
+9. Accumulator idles until next sc_lock.
 ```
 
 ---
@@ -235,7 +282,8 @@ The reference branch samples `rx_r[n]` must be buffered for one clock cycle so a
 | CFO immunity — small | Inject ε = ±0.3 bins | Weight magnitudes identical to zero-CFO case |
 | CFO immunity — large | Inject ε = ±8.9 bins (±20 ppm / SF6) | Weight magnitudes identical to zero-CFO case; no Dirichlet attenuation |
 | CFO immunity — integer bin | Inject ε = ±1, ±2, … bins | No combining gain collapse; Z_j magnitude unaffected |
-| Accumulation window | Check sample count | `n_acc ≈ (8 - SC_HITS_REQ - 1) · M` |
+| Accumulation window, baseline mode | Check sample count | `n_acc ≈ (PREAMBLE_LEN - SC_HITS_REQ - 1) · M` |
+| Accumulation window, PSRAM mode | Extend `packet_end_estimate` over a packet | `n_acc` grows to `packet_end_estimate - sc_lock_sample - TACC_GUARD + 1` |
 | Overflow check | Max-amplitude 8-bit input (±127) at N_acc=640 | Z_j component ≤ ±20.6M; no int32 overflow (100× headroom) |
 | Multi-branch | NR=4, independent h_j per branch | Z_j = h_j · conj(h_ref) · n_acc for each j |
 | Ref branch selection | Set ref_sel = 1, 2, 3 | Correct branch used as reference; other estimates rotate accordingly |
@@ -245,7 +293,7 @@ The reference branch samples `rx_r[n]` must be buffered for one clock cycle so a
 
 ## Timing risks
 
-The training window is bounded by SC lock on one side and the end of the 8-symbol preamble on the other. Three conditions can compress or corrupt this window.
+The training window is bounded by SC lock on one side and by the active-mode `acc_end` on the other. In the baseline live path this is the end of the configured preamble; in PSRAM mode it may extend later into the packet. Three conditions can compress or corrupt the useful window.
 
 ### 1. Late SC lock at low SNR
 
@@ -253,8 +301,8 @@ SC lock is not guaranteed at the first opportunity. At low SNR the Schmidl-Cox m
 
 | SNR | Lock rate | Effect on N_acc |
 |---|---|---|
-| 20 dB | 100% | Always locks at 3M; full 5-symbol training |
-| 10 dB | 85% | Mean N_acc ≈ 5 symbols; ~1.4% of packets lock after 6M (< 2 symbols training) |
+| 20 dB | 100% | Always locks at 3M; full 5-symbol training in baseline mode |
+| 10 dB | 85% | Mean N_acc ≈ 5 symbols in baseline mode; ~1.4% of packets lock after 6M (< 2 symbols training) |
 | 6 dB | ~24% | High miss rate; when lock occurs it is often late |
 | ≤ 3 dB | < 1% | Essentially no lock |
 
@@ -272,9 +320,9 @@ Training loss vs lock delay (SF6, N_acc referenced to ideal 5-symbol window):
 
 ### 2. Short preamble
 
-LoRa allows preamble lengths shorter than the default 8 upchirps (minimum configurable). If a transmitter uses a 6-symbol preamble, `acc_end = timing_ref + 6M − 1` and `N_acc ≤ 3M` even with an ideal early lock — a −2.2 dB training loss from the baseline. The accumulator spec assumes 8 symbols; deployments with shorter preambles must reduce `SC_HITS_REQ` or accept the extra training loss.
+LoRa allows preamble lengths shorter than the default 8 upchirps (minimum configurable). In the baseline live path, if a transmitter uses a 6-symbol preamble, `acc_end = timing_ref + 6M − 1` and `N_acc ≤ 3M` even with an ideal early lock — a −2.2 dB training loss from the baseline. The live-path accumulator spec therefore needs `PREAMBLE_LEN` tracking. In PSRAM mode, this constraint is relaxed because accumulation may continue beyond the preamble if desired.
 
-**Mitigation:** make `TACC_PREAMBLE_LEN` a configurable register (range 6–16 symbols) so `acc_end` tracks the actual preamble length rather than assuming 8. For the demo deployment, preamble length is set to 16 symbols, giving up to 13 symbols of training accumulation with `SC_HITS_REQ=2` — approximately +4 dB vs the 5-symbol baseline.
+**Mitigation:** make `TACC_PREAMBLE_LEN` a configurable register (range 6–16 symbols) so baseline-mode `acc_end` tracks the actual preamble length rather than assuming 8. For the demo deployment, preamble length is set to 16 symbols, giving up to 13 symbols of training accumulation with `SC_HITS_REQ=2` — approximately +4 dB vs the 5-symbol baseline. In PSRAM mode, optionally replace the preamble-bounded stop with `packet_end_estimate - TACC_GUARD` to trade added latency for higher estimate SNR.
 
 ### 3. First-packet saturation at maximum gain
 
@@ -291,6 +339,7 @@ The AGC fires at `CORR_LOCK` and queues a gain step to apply at the next IDLE bo
 ## Known Limitations
 
 - **Early preamble symbols missed.** Approximately `(SC_HITS_REQ + 1)` preamble symbols are not accumulated. Training SNR is reduced by ~2 dB vs ideal (5 of 8 symbols with `SC_HITS_REQ = 2`).
+- **Mode-dependent windowing.** The baseline live path intentionally constrains accumulation to the preamble so weights are ready before live payload. This is an architectural timing choice, not a mathematical requirement of the branch-reference estimator. When PSRAM replay is enabled, the accumulation window may be extended later into the packet.
 - **Relative estimates only (combining).** `Z_j` estimates `h_j · conj(h_ref)`, not `h_j` independently. This is sufficient for MRC/EGC/SC combining. Absolute per-branch magnitude is recovered from `E_ref` — see Recovering absolute channel magnitudes. N0 bias in `E_ref` affects ALMMSE at low SNR; a separate noise-floor estimate is needed to debias for that use case.
 - **Weak reference degrades all estimates.** If `h_ref ≈ 0`, all `Z_j` are noise-dominated. Mitigated by static `TACC_REF_SEL` pointing to the best-known antenna for the deployment.
 - **Frontend-buffer limited, not accumulator-limited.** Accumulator register cost scales with NR only (not M). `SF6` is always supported with the baseline dedicated frontend SRAM path. `SF7` is supported only to the extent that the Frontend Buffer can supply the required delayed samples for the selected storage mode; if the optional CPU SRAM borrow path is unavailable, the intended fallback is `NR=2` acquisition at `SF7`.

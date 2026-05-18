@@ -355,6 +355,39 @@ The following boundaries require explicit CDC treatment:
 > FFT Engine (~10 K GE) and Baseband SRAM (544 KB, ~4.50 mm²) are removed in the non-FFT architecture. CPU memory is a single unified 4 KB SRAM (text + data + stack). The current memory plan uses GF-provided `gf180mcu_fd_ip_sram__sram512x8m8wm1` macros for the frontend buffer and `gf180mcu_ocd_ip_sram` experimental macros for the 4 KB CPU SRAM estimate. GE estimates for new blocks are preliminary.
 >
 > Dedicated frontend SRAM remains the primary acquisition buffer. An optional architecture extension may allow the Frontend Buffer Controller to borrow a reserved upper CPU SRAM window (`CPU_SRAM_BORROW_EN`) to extend delayed-sample depth for `SF7`, but only when `CPU_RESET=1` or when firmware is explicitly excluded from that borrowed bank. In the shared case, the reserved upper `1 kB` bank must be removed from the linker/runtime-visible PicoRV32 memory map so `.text`, `.data`, `.bss`, and stack never touch it. If the borrow path is unavailable, `SF7` must fall back to `NR=2` acquisition on branches `1` and `3` rather than relying on four-branch sample storage that is not guaranteed.
+>
+> **Deferred SC detector area-reduction ideas.** Trial Yosys/GF180 synthesis indicates the Schmidl-Cox detector remains one of the dominant logic blocks even after serializing the symbol-boundary metric math. The following options are worth evaluating, but are intentionally not implemented yet:
+> - reduce the detector branch count before correlation if 4 independent antenna branches are not required for acquisition
+> - tighten accumulator widths using a proper worst-case dynamic-range bound instead of the current conservative 32-bit accumulation and 64-bit metric path
+> - replace exact `|C|^2 = C_i^2 + C_q^2` with a cheaper approximation such as `|C_i| + |C_q|`
+> - replace exact energy-product normalization `E_cur * E_del` with a cheaper proxy such as `min(E_cur, E_del)` or `E_cur + E_del`, subject to detection-performance validation
+> - subsample or partially decimate the correlation window if full-rate SC updates are not required for reliable lock
+> - move more of the per-sample branch math onto a time-multiplexed shared datapath if acquisition latency budget permits
+> - use a simpler coarse trigger on fewer branches and only enable full multi-antenna correlation after a candidate preamble event
+>
+> **Deferred acquisition simplification candidate.** A promising area-reduction direction is to make acquisition explicitly `NR=2` while preserving `NR=4` for post-lock combining. In that architecture:
+> - the Schmidl-Cox detector runs on 2 antennas rather than 4
+> - the delayed-sample frontend buffer stores only those 2 acquisition branches, which can reduce the dedicated frontend SRAM requirement from 2 macros to 1 macro in the acquisition path
+> - training and combining still use all 4 live branches after lock
+>
+> This is attractive if 2-antenna detection diversity is already sufficient at the target SNR operating point. The expected benefits are reduced SC logic, reduced delayed-sample routing/control complexity, and roughly half of the current frontend acquisition SRAM area. The main risk is lower acquisition robustness than 4-branch SC, so this direction still requires simulation validation before it becomes the baseline architecture.
+>
+> **Deferred acquisition mode ladder.** If acquisition is reduced to `NR=2`, the operating modes can be staged by spreading memory cost across capability tiers instead of sizing the dedicated frontend SRAM for the worst case:
+> - `SF6`: baseline `NR=2` acquisition using dedicated frontend SRAM only
+> - `SF7`: preferred `NR=2` acquisition in dedicated frontend SRAM, with `NR=1` fallback if delayed-sample depth or defect tolerance becomes the limiting factor
+> - `SF8+`: use borrowed CPU SRAM (`CPU_SRAM_BORROW_EN`) to extend delayed-sample depth, likely with reduced acquisition branch count (`NR=1` or `NR=2`) rather than full 4-branch buffered acquisition
+>
+> In this model, acquisition capability scales by mode while post-lock processing can still preserve full 4-branch live training and combining. This is a promising way to trade area against optional high-SF support, but it depends on three things being validated:
+> - 2-branch and 1-branch acquisition performance at the target SNRs
+> - clean CPU-SRAM arbitration and memory-map isolation during borrow mode
+> - acceptable acquisition latency and control complexity at higher spreading factors
+>
+> **Deferred PSRAM-assisted software weight generation.** If the optional PSRAM replay path is used, same-packet software weight generation becomes much more plausible than in the baseline live path. In the replay architecture, the receiver buffers the packet, waits for `W_commit`, and then replays from the stored packet start, so the weight deadline moves from "before payload start" to effectively "before packet end". Under that model:
+> - PicoRV32 can read `Z_j`, compute weights in software, write `W_SHADOW`, and pulse `W_COMMIT` without racing the live payload boundary
+> - simple software formulas such as MRC, SC, EGC, EMA-smoothed variants, or other low-complexity heuristics become candidates for same-packet use
+> - this may allow removal or major simplification of the dedicated hardware weight-generation block if the replay path is accepted architecturally
+>
+> The expected benefit is logic-area reduction in the cold-path control/DSP hardware. The main risks are replay-mode complexity, packet-latency increase, and the need to prove that firmware service time remains comfortably inside the buffered-packet window under worst-case interrupt and memory-access behavior.
 
 ---
 

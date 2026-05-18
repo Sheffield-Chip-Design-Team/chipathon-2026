@@ -249,7 +249,9 @@ For the demo deployment (16-symbol preamble), the pre-payload overhead becomes 1
 
 ### Same-packet weight commit window
 
-`training_done` fires at `timing_ref + 8M − 1` (end of the 8-symbol preamble). For weights to apply to the **current** packet's payload, `W_COMMIT` must fire and `W_ACTIVE` must be updated before the combiner processes `timing_ref + 12.25M`.
+This section describes the **baseline live path** (`PSRAM_EN = 0`) only.
+
+`training_done` fires at `timing_ref + 8M − 1` (end of the 8-symbol preamble). For weights to apply to the **current** packet's payload in the baseline live path, `W_COMMIT` must fire and `W_ACTIVE` must be updated before the combiner processes `timing_ref + 12.25M`.
 
 ```
 sc_lock
@@ -276,7 +278,9 @@ commit window    =  272 samples  =  69,632 cycles  ≈  2.2 ms
 | Software (PicoRV32) | ~1,000–5,000 cycles | ~65,000–69,000 | ~14× |
 | Demo (16-symbol preamble) | ~5,000 cycles | ~200,000 | ~40× |
 
-The margin is the time available for weight computation. Missing the window is not fatal: the Packet Control FSM sets `W_MISSED_PACKET` and activates the new weights at the next `safe_switch` (next packet idle boundary). The combiner uses the previous packet's weights or bypass for the current payload.
+The margin is the time available for weight computation in the baseline live path. Missing the window is not fatal: the Packet Control FSM sets `W_MISSED_PACKET` and activates the new weights at the next `safe_switch` (next packet idle boundary). The combiner uses the previous packet's weights or bypass for the current payload.
+
+When `PSRAM_EN = 1`, this live-payload deadline is replaced by the replay deadline: `W_COMMIT` must arrive before `packet_end` so the controller can begin replay of the buffered packet.
 
 ---
 
@@ -360,7 +364,7 @@ The margin is the time available for weight computation. Missing the window is n
 | W_COMMIT timing | Check FSM interaction | Packet Control FSM defers to next idle boundary if packet is active; W_MISSED_PACKET set |
 | Shift normalisation | Z_j with large dynamic range | K computed correctly; no overflow in H_j after shift |
 | All branches equal | \|Z_j\| identical for j=0..3 | MRC weights equal-magnitude across all branches |
-| Same-packet margin | SF6, WGT_AUTO_COMMIT=1 | W_COMMIT fires before payload start (timing_ref + 12.25·M samples) |
+| Same-packet margin, baseline live path | SF6, WGT_AUTO_COMMIT=1 | W_COMMIT fires before payload start (timing_ref + 12.25·M samples) |
 | Reciprocal precision | S swept over full int64 range | \|1/S − recip(S)\| < 2^{−14} (14-bit accurate, sufficient for Q1.15) |
 
 ---
