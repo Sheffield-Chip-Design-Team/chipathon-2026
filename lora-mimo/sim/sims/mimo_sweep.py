@@ -1,0 +1,585 @@
+#!/usr/bin/env python3
+"""
+MIMO MRC sweep simulations.
+
+Covers six experiments:
+  1. BER vs SNR   — bypass / oracle / training / EGC / SC / post-detection (NR=4)
+  2. NR scaling   — SER vs NR at fixed SNR for oracle and training
+  3. Preamble len — oracle-training gap vs preamble_len at several SNRs
+  4. Doppler      — SER vs f_D for MRC oracle vs SC vs bypass
+  5. Hierarchical — flat NR=8 vs two-stage 2×NR=4 for oracle and training
+
+Run:
+    cd /path/to/chipathon-2026/lora-mimo
+    python3 -m sim.sims.mimo_sweep              # all sweeps
+    python3 -m sim.sims.mimo_sweep --sweep ber
+    python3 -m sim.sims.mimo_sweep --sweep nr
+    python3 -m sim.sims.mimo_sweep --sweep preamble
+    python3 -m sim.sims.mimo_sweep --sweep doppler
+    python3 -m sim.sims.mimo_sweep --sweep hierarchical
+    python3 -m sim.sims.mimo_sweep -n 2000      # more trials per point
+
+Output:  sim/plots/sweep_*.png
+"""
+
+import argparse
+import sys
+import os
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+from sim.models.lora               import modulate, demodulate
+from sim.models.channel            import rayleigh_coefficients
+from sim.models.receiver           import nonfft_combine
+from sim.models.training_accumulator import (
+    training_accumulate,
+    compute_weights,
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _dechirp_fft(rx: np.ndarray) -> np.ndarray:
+    """Return FFT magnitude spectrum of one de-chirped symbol."""
+    M = len(rx)
+    n = np.arange(M)
+    return np.abs(np.fft.fft(rx * np.exp(-1j * np.pi * n ** 2 / M)))
+
+
+def _jakes(N: int, f_D: float, f_s: float, N_osc: int = 12) -> np.ndarray:
+    """Jakes fading: NR-independent complex envelope, length N."""
+    t = np.arange(N) / f_s
+    h = np.zeros(N, dtype=complex)
+    for k in range(1, N_osc + 1):
+        alpha = np.pi * k / (N_osc + 1)
+        phase = np.random.uniform(0, 2 * np.pi)
+        h += np.exp(1j * (2 * np.pi * f_D * np.cos(alpha) * t + phase))
+    return h / np.sqrt(N_osc)
+
+
+def _train_weights(rx_preamble: np.ndarray, M: int, preamble_len: int,
+                   sc_hit_syms: int = 2, mode: str = "mrc") -> np.ndarray:
+    """Run training_accumulate + compute_weights; SC fires after sc_hit_syms."""
+    sc_lock  = sc_hit_syms * M
+    timing   = 0
+    Z, _, E  = training_accumulate(rx_preamble, sc_lock, timing, M,
+                                   preamble_len=preamble_len)
+    return compute_weights(Z, mode=mode, E_ref=E)
+
+
+# ---------------------------------------------------------------------------
+# Core packet simulation
+# ---------------------------------------------------------------------------
+
+def simulate_packet(
+    SF: int,
+    NR: int,
+    N0: float,
+    mode: str,
+    preamble_len: int = 8,
+    h_fixed: np.ndarray | None = None,
+) -> tuple[int, int]:
+    """
+    Simulate one LoRa packet (preamble + 1 payload symbol) end-to-end.
+
+    Parameters
+    ----------
+    SF          : spreading factor
+    NR          : receive branches
+    N0          : per-sample noise power (linear)
+    mode        : oracle | training | egc | sc | bypass | postdet
+    preamble_len: upchirp preamble length in symbols
+    h_fixed     : (NR,) channel — drawn fresh if None
+
+    Returns
+    -------
+    (b_tx, b_rx)
+    """
+    M = 2 ** SF
+    h = rayleigh_coefficients(NR) if h_fixed is None else h_fixed
+
+    noise = lambda n: np.sqrt(N0 / 2) * (
+        np.random.randn(NR, n) + 1j * np.random.randn(NR, n)
+    )
+
+    # Preamble: preamble_len upchirps at symbol 0
+    chirp0     = modulate(0, M)
+    preamble   = np.tile(chirp0, preamble_len)            # (preamble_len*M,)
+    rx_preamble = h[:, None] * preamble[None, :] + noise(preamble_len * M)
+
+    # Payload: one random symbol
+    b_tx      = np.random.randint(0, M)
+    rx_payload = h[:, None] * modulate(b_tx, M)[None, :] + noise(M)
+
+    if mode == "postdet":
+        fft_sum = sum(_dechirp_fft(rx_payload[j]) for j in range(NR))
+        return b_tx, int(np.argmax(fft_sum))
+
+    if mode == "oracle":
+        S = float(np.sum(np.abs(h) ** 2))
+        w = np.conj(h) / S
+    elif mode == "training":
+        w = _train_weights(rx_preamble, M, preamble_len, mode="mrc")
+    elif mode == "egc":
+        Z, _, _ = training_accumulate(rx_preamble, 2 * M, 0, M,
+                                      preamble_len=preamble_len)
+        w = np.exp(-1j * np.angle(Z)) / NR
+    elif mode == "sc":
+        Z, _, _ = training_accumulate(rx_preamble, 2 * M, 0, M,
+                                      preamble_len=preamble_len)
+        best = int(np.argmax(np.abs(Z)))
+        w = np.zeros(NR, dtype=complex)
+        w[best] = np.exp(-1j * np.angle(Z[best]))
+    elif mode == "bypass":
+        w = np.zeros(NR, dtype=complex)
+        w[0] = 1.0
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+    y = nonfft_combine(rx_payload, w)
+    return b_tx, demodulate(y)
+
+
+# ---------------------------------------------------------------------------
+# Monte Carlo runner
+# ---------------------------------------------------------------------------
+
+def ser_at_snr(SF, NR, snr_db, mode, N_packets, preamble_len=8) -> float:
+    N0 = 10 ** (-snr_db / 10)
+    errs = sum(
+        b_tx != b_rx
+        for b_tx, b_rx in (
+            simulate_packet(SF, NR, N0, mode, preamble_len)
+            for _ in range(N_packets)
+        )
+    )
+    return errs / N_packets
+
+
+# ---------------------------------------------------------------------------
+# Sweep 1 — BER vs SNR
+# ---------------------------------------------------------------------------
+
+def sweep_ber(SF=7, NR=4, N_packets=500, snr_range=None):
+    if snr_range is None:
+        snr_range = np.arange(-15, 6, 2, dtype=float)
+
+    modes = ["bypass", "sc", "egc", "training", "oracle", "postdet"]
+    labels = {
+        "bypass":  "Bypass (NR=1)",
+        "sc":      "SC",
+        "egc":     "EGC",
+        "training":"Training MRC",
+        "oracle":  "Oracle MRC",
+        "postdet": "Post-det (non-coh)",
+    }
+    colours = {
+        "bypass":  "gray",
+        "sc":      "tab:red",
+        "egc":     "tab:orange",
+        "training":"tab:blue",
+        "oracle":  "tab:green",
+        "postdet": "tab:purple",
+    }
+
+    results = {m: [] for m in modes}
+    for snr_db in snr_range:
+        print(f"  BER sweep SNR={snr_db:+.0f} dB", flush=True)
+        for m in modes:
+            results[m].append(ser_at_snr(SF, NR, snr_db, m, N_packets))
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for m in modes:
+        ser = np.array(results[m])
+        ax.semilogy(snr_range, np.clip(ser, 1e-4, 1),
+                    "o-", label=labels[m], color=colours[m])
+    ax.set_xlabel("Per-antenna SNR (dB)")
+    ax.set_ylabel("Symbol Error Rate")
+    ax.set_title(f"MIMO MRC — BER vs SNR  SF={SF}  NR={NR}")
+    ax.legend(fontsize=9)
+    ax.grid(True, which="both", ls="--", alpha=0.4)
+    ax.set_ylim(5e-4, 1.05)
+    outpath = "sim/plots/sweep_ber.png"
+    fig.savefig(outpath, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  → {outpath}")
+    return results, snr_range
+
+
+# ---------------------------------------------------------------------------
+# Sweep 2 — NR scaling
+# ---------------------------------------------------------------------------
+
+def sweep_nr(SF=7, snr_db=0.0, N_packets=500, NR_list=None):
+    if NR_list is None:
+        NR_list = [1, 2, 4, 8]
+
+    modes  = ["oracle", "training", "sc", "bypass"]
+    labels = {"oracle": "Oracle MRC", "training": "Training MRC",
+              "sc": "SC", "bypass": "Bypass (NR=1)"}
+    colours = {"oracle": "tab:green", "training": "tab:blue",
+               "sc": "tab:red", "bypass": "gray"}
+
+    results = {m: [] for m in modes}
+    for NR in NR_list:
+        print(f"  NR scaling NR={NR}", flush=True)
+        for m in modes:
+            effective_NR = 1 if m == "bypass" else NR
+            results[m].append(ser_at_snr(SF, effective_NR, snr_db, m, N_packets))
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for m in modes:
+        ax.semilogy(NR_list, np.clip(results[m], 1e-4, 1),
+                    "o-", label=labels[m], color=colours[m])
+    ax.set_xlabel("Number of RX branches (NR)")
+    ax.set_ylabel("Symbol Error Rate")
+    ax.set_title(f"MIMO MRC — NR scaling  SF={SF}  SNR={snr_db:+.0f} dB")
+    ax.set_xticks(NR_list)
+    ax.legend(fontsize=9)
+    ax.grid(True, which="both", ls="--", alpha=0.4)
+    outpath = "sim/plots/sweep_nr.png"
+    fig.savefig(outpath, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  → {outpath}")
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Sweep 3 — Preamble length
+# ---------------------------------------------------------------------------
+
+def sweep_preamble(SF=7, NR=4, N_packets=600, preamble_lens=None, snr_dbs=None):
+    if preamble_lens is None:
+        preamble_lens = [4, 6, 8, 10, 12, 16]
+    if snr_dbs is None:
+        snr_dbs = [-5.0, 0.0, 5.0]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    # Left: absolute SER for oracle vs training at different preamble lengths
+    ax = axes[0]
+    cmap = plt.cm.viridis(np.linspace(0, 0.85, len(snr_dbs)))
+    for i, snr_db in enumerate(snr_dbs):
+        ser_oracle   = []
+        ser_training = []
+        for pl in preamble_lens:
+            print(f"  Preamble sweep preamble_len={pl}  SNR={snr_db:+.0f} dB", flush=True)
+            ser_oracle.append(ser_at_snr(SF, NR, snr_db, "oracle",   N_packets, pl))
+            ser_training.append(ser_at_snr(SF, NR, snr_db, "training", N_packets, pl))
+        c = cmap[i]
+        ax.semilogy(preamble_lens, np.clip(ser_oracle,   1e-4, 1),
+                    "o--", color=c, alpha=0.6, label=f"Oracle {snr_db:+.0f} dB")
+        ax.semilogy(preamble_lens, np.clip(ser_training, 1e-4, 1),
+                    "s-",  color=c, label=f"Training {snr_db:+.0f} dB")
+    ax.set_xlabel("Preamble length (symbols)")
+    ax.set_ylabel("SER")
+    ax.set_title("SER vs Preamble length  (dashed=oracle)")
+    ax.legend(fontsize=7, ncol=2)
+    ax.grid(True, which="both", ls="--", alpha=0.4)
+
+    # Right: oracle-training gap in dB at SNR=0 dB
+    snr_db = 0.0
+    gaps = []
+    ser_o_list = []
+    ser_t_list = []
+    for pl in preamble_lens:
+        print(f"  Gap sweep preamble_len={pl}", flush=True)
+        so = ser_at_snr(SF, NR, snr_db, "oracle",   N_packets, pl)
+        st = ser_at_snr(SF, NR, snr_db, "training", N_packets, pl)
+        ser_o_list.append(so)
+        ser_t_list.append(st)
+        # gap in dB: how much extra SNR training needs to match oracle
+        ratio = max(st, 1e-6) / max(so, 1e-6)
+        gaps.append(10 * np.log10(max(ratio, 1.0)))
+
+    ax2 = axes[1]
+    ax2.plot(preamble_lens, gaps, "o-", color="tab:blue")
+    ax2.set_xlabel("Preamble length (symbols)")
+    ax2.set_ylabel("Training estimation loss (dB)")
+    ax2.set_title(f"Oracle–Training gap vs Preamble length  SNR=0 dB")
+    ax2.grid(True, ls="--", alpha=0.4)
+    ax2.set_ylim(bottom=0)
+
+    outpath = "sim/plots/sweep_preamble.png"
+    fig.savefig(outpath, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  → {outpath}")
+
+
+# ---------------------------------------------------------------------------
+# Sweep 4 — Doppler (Jakes time-varying channel)
+# ---------------------------------------------------------------------------
+
+def simulate_packet_doppler(SF: int, NR: int, N0: float, mode: str,
+                            f_D: float, preamble_len: int = 8) -> tuple[int, int]:
+    """Like simulate_packet but with Jakes time-varying channel per branch."""
+    M = 2 ** SF
+    f_s = 2 ** SF * 125_000 / 128  # baseband sample rate = BW = 125 kHz (normalised)
+
+    N_total = (preamble_len + 1) * M
+
+    noise = lambda n: np.sqrt(N0 / 2) * (
+        np.random.randn(NR, n) + 1j * np.random.randn(NR, n)
+    )
+
+    # Time-varying channel per branch
+    h_time = np.array([_jakes(N_total, f_D, f_s) for _ in range(NR)])
+
+    chirp0 = modulate(0, M)
+    preamble_sig = np.tile(chirp0, preamble_len)  # (preamble_len*M,)
+
+    rx_preamble = (h_time[:, :preamble_len * M] * preamble_sig[None, :]
+                   + noise(preamble_len * M))
+
+    b_tx = np.random.randint(0, M)
+    payload_start = preamble_len * M
+    rx_payload = (h_time[:, payload_start:payload_start + M] * modulate(b_tx, M)[None, :]
+                  + noise(M))
+
+    if mode == "postdet":
+        fft_sum = sum(_dechirp_fft(rx_payload[j]) for j in range(NR))
+        return b_tx, int(np.argmax(fft_sum))
+
+    if mode == "oracle":
+        h_pay = h_time[:, payload_start:payload_start + M].mean(axis=1)
+        S = float(np.sum(np.abs(h_pay) ** 2))
+        w = np.conj(h_pay) / S
+    elif mode == "training":
+        w = _train_weights(rx_preamble, M, preamble_len, mode="mrc")
+    elif mode == "sc":
+        Z, _, _ = training_accumulate(rx_preamble, 2 * M, 0, M,
+                                      preamble_len=preamble_len)
+        best = int(np.argmax(np.abs(Z)))
+        w = np.zeros(NR, dtype=complex)
+        w[best] = np.exp(-1j * np.angle(Z[best]))
+    elif mode == "bypass":
+        w = np.zeros(NR, dtype=complex)
+        w[0] = 1.0
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+    y = nonfft_combine(rx_payload, w)
+    return b_tx, demodulate(y)
+
+
+def sweep_doppler(SF=7, NR=4, snr_db=0.0, N_packets=500,
+                  fd_list=None):
+    if fd_list is None:
+        fd_list = [0, 1, 2, 5, 10, 20, 50, 100]
+
+    modes  = ["oracle", "training", "sc", "postdet", "bypass"]
+    labels = {"oracle":  "Oracle MRC (genie payload h)",
+               "training":"Training MRC",
+               "sc":      "SC",
+               "postdet": "Post-det (non-coh)",
+               "bypass":  "Bypass (NR=1)"}
+    colours = {"oracle": "tab:green", "training": "tab:blue",
+               "sc": "tab:red", "postdet": "tab:purple", "bypass": "gray"}
+
+    N0 = 10 ** (-snr_db / 10)
+    results = {m: [] for m in modes}
+
+    for f_D in fd_list:
+        print(f"  Doppler f_D={f_D} Hz", flush=True)
+        for m in modes:
+            errs = sum(
+                b_tx != b_rx
+                for b_tx, b_rx in (
+                    simulate_packet_doppler(SF, NR, N0, m, f_D)
+                    for _ in range(N_packets)
+                )
+            )
+            results[m].append(errs / N_packets)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    fd_plot = [max(f, 0.1) for f in fd_list]  # avoid log(0)
+    for m in modes:
+        ax.semilogx(fd_plot, results[m], "o-",
+                    label=labels[m], color=colours[m])
+    ax.set_xlabel("Doppler frequency f_D (Hz)")
+    ax.set_ylabel("Symbol Error Rate")
+    ax.set_title(f"MIMO MRC vs Doppler  SF={SF}  NR={NR}  SNR={snr_db:+.0f} dB")
+    ax.legend(fontsize=9)
+    ax.grid(True, which="both", ls="--", alpha=0.4)
+    ax.set_ylim(0, 0.7)
+    # Mark walking speed at 868 MHz
+    f_walk = 868e6 * (4 / 3.6) / 3e8   # ~3.2 Hz
+    ax.axvline(f_walk, ls=":", color="black", alpha=0.5, label="Walking 4 km/h")
+    ax.text(f_walk * 1.1, 0.62, "walk\n4 km/h", fontsize=7, alpha=0.7)
+    outpath = "sim/plots/sweep_doppler.png"
+    fig.savefig(outpath, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  → {outpath}")
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Sweep 5 — Hierarchical MRC (2×NR=4 vs flat NR=8)
+# ---------------------------------------------------------------------------
+
+def simulate_hierarchical(SF: int, N0: float, NR_stage: int = 4,
+                          preamble_len: int = 8) -> tuple[int, int]:
+    """
+    Two-stage hierarchical MRC: 2×NR_stage antennas → flat combine stage-1
+    outputs → decode.  All weights are oracle for a fair comparison.
+    """
+    NR_total = 2 * NR_stage
+    M = 2 ** SF
+    h = rayleigh_coefficients(NR_total)
+
+    noise = lambda NR, n: np.sqrt(N0 / 2) * (
+        np.random.randn(NR, n) + 1j * np.random.randn(NR, n)
+    )
+
+    chirp0 = modulate(0, M)
+    preamble_sig = np.tile(chirp0, preamble_len)
+
+    b_tx = np.random.randint(0, M)
+    s_pay = modulate(b_tx, M)
+
+    def group_combine(branch_idx, mode):
+        NR = len(branch_idx)
+        h_g = h[branch_idx]
+        rx_preamble = h_g[:, None] * preamble_sig[None, :] + noise(NR, preamble_len * M)
+        rx_payload  = h_g[:, None] * s_pay[None, :] + noise(NR, M)
+        if mode == "oracle":
+            S = float(np.sum(np.abs(h_g) ** 2))
+            w = np.conj(h_g) / S
+        else:
+            w = _train_weights(rx_preamble, M, preamble_len, mode="mrc")
+        return nonfft_combine(rx_payload, w)   # (M,) combined signal
+
+    # --- Training hierarchical ---
+    y_A_train = group_combine(np.arange(NR_stage), "training")
+    y_B_train = group_combine(np.arange(NR_stage, NR_total), "training")
+    # Stage-2: treat y_A and y_B as 2 "antennas" — train on their preamble portions
+    # Re-run preamble through groups to get stage-2 training signals
+    h_A = h[:NR_stage]; h_B = h[NR_stage:]
+    preamble_A = h_A[:, None] * preamble_sig[None, :] + noise(NR_stage, preamble_len * M)
+    preamble_B = h_B[:, None] * preamble_sig[None, :] + noise(NR_stage, preamble_len * M)
+    w_A = _train_weights(preamble_A, M, preamble_len)
+    w_B = _train_weights(preamble_B, M, preamble_len)
+    y_preamble_A = nonfft_combine(preamble_A[:, :2 * M], w_A)
+    y_preamble_B = nonfft_combine(preamble_B[:, :2 * M], w_B)
+    rx2_preamble = np.stack([y_preamble_A, y_preamble_B])   # (2, 2*M)
+    w2_train = _train_weights(rx2_preamble, M, preamble_len=2)
+    rx2_payload = np.stack([y_A_train, y_B_train])
+    y_hier_train = nonfft_combine(rx2_payload, w2_train)
+    b_rx_hier_train = demodulate(y_hier_train)
+
+    # --- Oracle hierarchical ---
+    y_A_oracle = group_combine(np.arange(NR_stage), "oracle")
+    y_B_oracle = group_combine(np.arange(NR_stage, NR_total), "oracle")
+    S_A = float(np.sum(np.abs(h[:NR_stage]) ** 2))
+    S_B = float(np.sum(np.abs(h[NR_stage:]) ** 2))
+    S2  = S_A + S_B
+    w2  = np.array([S_A / S2, S_B / S2], dtype=complex)
+    y_hier_oracle = nonfft_combine(np.stack([y_A_oracle, y_B_oracle]), w2)
+    b_rx_hier_oracle = demodulate(y_hier_oracle)
+
+    return b_tx, b_rx_hier_train, b_rx_hier_oracle
+
+
+def sweep_hierarchical(SF=7, N_packets=500, snr_range=None):
+    if snr_range is None:
+        snr_range = np.arange(-10, 8, 2, dtype=float)
+
+    NR_stage = 4
+    NR_total = 8
+
+    ser_flat_oracle    = []
+    ser_flat_train     = []
+    ser_hier_oracle    = []
+    ser_hier_train     = []
+
+    for snr_db in snr_range:
+        print(f"  Hierarchical SNR={snr_db:+.0f} dB", flush=True)
+        N0 = 10 ** (-snr_db / 10)
+
+        # Flat NR=8
+        fo = ft = 0
+        for _ in range(N_packets):
+            b_tx, b_rx = simulate_packet(SF, NR_total, N0, "oracle")
+            fo += (b_tx != b_rx)
+            b_tx, b_rx = simulate_packet(SF, NR_total, N0, "training")
+            ft += (b_tx != b_rx)
+        ser_flat_oracle.append(fo / N_packets)
+        ser_flat_train.append(ft / N_packets)
+
+        # Hierarchical 2×4
+        ho = ht = 0
+        for _ in range(N_packets):
+            b_tx, b_rx_ht, b_rx_ho = simulate_hierarchical(SF, N0, NR_stage)
+            ho += (b_tx != b_rx_ho)
+            ht += (b_tx != b_rx_ht)
+        ser_hier_oracle.append(ho / N_packets)
+        ser_hier_train.append(ht / N_packets)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.semilogy(snr_range, np.clip(ser_flat_oracle, 1e-4, 1),
+                "o-",  color="tab:green",  label="Flat NR=8 oracle")
+    ax.semilogy(snr_range, np.clip(ser_flat_train,  1e-4, 1),
+                "o--", color="tab:blue",   label="Flat NR=8 training")
+    ax.semilogy(snr_range, np.clip(ser_hier_oracle, 1e-4, 1),
+                "s-",  color="tab:orange", label="Hierarchical 2×4 oracle")
+    ax.semilogy(snr_range, np.clip(ser_hier_train,  1e-4, 1),
+                "s--", color="tab:red",    label="Hierarchical 2×4 training")
+    ax.set_xlabel("Per-antenna SNR (dB)")
+    ax.set_ylabel("Symbol Error Rate")
+    ax.set_title(f"Flat NR=8 vs Hierarchical 2×NR=4  SF={SF}")
+    ax.legend(fontsize=9)
+    ax.grid(True, which="both", ls="--", alpha=0.4)
+    ax.set_ylim(5e-4, 1.05)
+    outpath = "sim/plots/sweep_hierarchical.png"
+    fig.savefig(outpath, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  → {outpath}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="MIMO MRC sweep simulations")
+    parser.add_argument("--sweep", choices=["ber", "nr", "preamble", "doppler",
+                                             "hierarchical", "all"],
+                        default="all")
+    parser.add_argument("-n", "--n-packets", type=int, default=500,
+                        help="Monte Carlo trials per point (default 500)")
+    args = parser.parse_args()
+
+    os.makedirs("sim/plots", exist_ok=True)
+    N = args.n_packets
+    run = args.sweep
+
+    if run in ("ber", "all"):
+        print("\n[1/5] BER vs SNR sweep")
+        sweep_ber(N_packets=N)
+
+    if run in ("nr", "all"):
+        print("\n[2/5] NR scaling sweep")
+        sweep_nr(N_packets=N)
+
+    if run in ("preamble", "all"):
+        print("\n[3/5] Preamble length sweep")
+        sweep_preamble(N_packets=N)
+
+    if run in ("doppler", "all"):
+        print("\n[4/5] Doppler sweep")
+        sweep_doppler(N_packets=N)
+
+    if run in ("hierarchical", "all"):
+        print("\n[5/5] Hierarchical MRC sweep")
+        sweep_hierarchical(N_packets=N)
+
+    print("\nDone. Plots saved to sim/plots/sweep_*.png")
+
+
+if __name__ == "__main__":
+    main()
