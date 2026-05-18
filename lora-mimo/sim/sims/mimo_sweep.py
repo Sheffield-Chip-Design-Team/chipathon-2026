@@ -423,63 +423,69 @@ def sweep_doppler(SF=7, NR=4, snr_db=0.0, N_packets=500,
 # ---------------------------------------------------------------------------
 
 def simulate_hierarchical(SF: int, N0: float, NR_stage: int = 4,
-                          preamble_len: int = 8) -> tuple[int, int]:
+                          preamble_len: int = 8) -> tuple[int, int, int]:
     """
-    Two-stage hierarchical MRC: 2×NR_stage antennas → flat combine stage-1
-    outputs → decode.  All weights are oracle for a fair comparison.
+    Two-stage hierarchical MRC: 2×NR_stage antennas total.
+
+    Stage 1: each group of NR_stage branches combines independently.
+    Stage 2: the two stage-1 outputs are treated as 2 "antennas" and
+             combined with weights estimated from the stage-1 combined preambles.
+
+    Bug fix: stage-2 training now uses the full combined preamble
+    (preamble_len * M samples), not a 2-symbol slice.
     """
     NR_total = 2 * NR_stage
     M = 2 ** SF
     h = rayleigh_coefficients(NR_total)
+    h_A, h_B = h[:NR_stage], h[NR_stage:]
 
     noise = lambda NR, n: np.sqrt(N0 / 2) * (
         np.random.randn(NR, n) + 1j * np.random.randn(NR, n)
     )
 
-    chirp0 = modulate(0, M)
-    preamble_sig = np.tile(chirp0, preamble_len)
+    chirp0       = modulate(0, M)
+    preamble_sig = np.tile(chirp0, preamble_len)   # (preamble_len*M,)
+    b_tx         = np.random.randint(0, M)
+    s_pay        = modulate(b_tx, M)
 
-    b_tx = np.random.randint(0, M)
-    s_pay = modulate(b_tx, M)
+    # Stage-1 received signals (single noise draw, shared by training + oracle)
+    rx_preamble_A = h_A[:, None] * preamble_sig[None, :] + noise(NR_stage, preamble_len * M)
+    rx_preamble_B = h_B[:, None] * preamble_sig[None, :] + noise(NR_stage, preamble_len * M)
+    rx_payload_A  = h_A[:, None] * s_pay[None, :] + noise(NR_stage, M)
+    rx_payload_B  = h_B[:, None] * s_pay[None, :] + noise(NR_stage, M)
 
-    def group_combine(branch_idx, mode):
-        NR = len(branch_idx)
-        h_g = h[branch_idx]
-        rx_preamble = h_g[:, None] * preamble_sig[None, :] + noise(NR, preamble_len * M)
-        rx_payload  = h_g[:, None] * s_pay[None, :] + noise(NR, M)
-        if mode == "oracle":
-            S = float(np.sum(np.abs(h_g) ** 2))
-            w = np.conj(h_g) / S
-        else:
-            w = _train_weights(rx_preamble, M, preamble_len, mode="mrc")
-        return nonfft_combine(rx_payload, w)   # (M,) combined signal
+    # ------------------------------------------------------------------ #
+    # Training hierarchical                                               #
+    # ------------------------------------------------------------------ #
+    w_A = _train_weights(rx_preamble_A, M, preamble_len)
+    w_B = _train_weights(rx_preamble_B, M, preamble_len)
 
-    # --- Training hierarchical ---
-    y_A_train = group_combine(np.arange(NR_stage), "training")
-    y_B_train = group_combine(np.arange(NR_stage, NR_total), "training")
-    # Stage-2: treat y_A and y_B as 2 "antennas" — train on their preamble portions
-    # Re-run preamble through groups to get stage-2 training signals
-    h_A = h[:NR_stage]; h_B = h[NR_stage:]
-    preamble_A = h_A[:, None] * preamble_sig[None, :] + noise(NR_stage, preamble_len * M)
-    preamble_B = h_B[:, None] * preamble_sig[None, :] + noise(NR_stage, preamble_len * M)
-    w_A = _train_weights(preamble_A, M, preamble_len)
-    w_B = _train_weights(preamble_B, M, preamble_len)
-    y_preamble_A = nonfft_combine(preamble_A[:, :2 * M], w_A)
-    y_preamble_B = nonfft_combine(preamble_B[:, :2 * M], w_B)
-    rx2_preamble = np.stack([y_preamble_A, y_preamble_B])   # (2, 2*M)
-    w2_train = _train_weights(rx2_preamble, M, preamble_len=2)
-    rx2_payload = np.stack([y_A_train, y_B_train])
-    y_hier_train = nonfft_combine(rx2_payload, w2_train)
+    # Stage-1 combined outputs
+    y_A = nonfft_combine(rx_payload_A, w_A)       # (M,)
+    y_B = nonfft_combine(rx_payload_B, w_B)       # (M,)
+
+    # Stage-2: train on the FULL combined preambles (preamble_len*M samples)
+    y_preamble_A  = nonfft_combine(rx_preamble_A, w_A)   # (preamble_len*M,)
+    y_preamble_B  = nonfft_combine(rx_preamble_B, w_B)   # (preamble_len*M,)
+    rx2_preamble  = np.stack([y_preamble_A, y_preamble_B])  # (2, preamble_len*M)
+    w2_train      = _train_weights(rx2_preamble, M, preamble_len=preamble_len)
+    y_hier_train  = nonfft_combine(np.stack([y_A, y_B]), w2_train)
     b_rx_hier_train = demodulate(y_hier_train)
 
-    # --- Oracle hierarchical ---
-    y_A_oracle = group_combine(np.arange(NR_stage), "oracle")
-    y_B_oracle = group_combine(np.arange(NR_stage, NR_total), "oracle")
-    S_A = float(np.sum(np.abs(h[:NR_stage]) ** 2))
-    S_B = float(np.sum(np.abs(h[NR_stage:]) ** 2))
-    S2  = S_A + S_B
-    w2  = np.array([S_A / S2, S_B / S2], dtype=complex)
-    y_hier_oracle = nonfft_combine(np.stack([y_A_oracle, y_B_oracle]), w2)
+    # ------------------------------------------------------------------ #
+    # Oracle hierarchical                                                 #
+    # ------------------------------------------------------------------ #
+    S_A = float(np.sum(np.abs(h_A) ** 2))
+    S_B = float(np.sum(np.abs(h_B) ** 2))
+    w_A_or = np.conj(h_A) / S_A
+    w_B_or = np.conj(h_B) / S_B
+
+    y_A_or = nonfft_combine(rx_payload_A, w_A_or)
+    y_B_or = nonfft_combine(rx_payload_B, w_B_or)
+
+    S_tot  = S_A + S_B
+    w2_or  = np.array([S_A / S_tot, S_B / S_tot], dtype=complex)
+    y_hier_oracle   = nonfft_combine(np.stack([y_A_or, y_B_or]), w2_or)
     b_rx_hier_oracle = demodulate(y_hier_oracle)
 
     return b_tx, b_rx_hier_train, b_rx_hier_oracle
