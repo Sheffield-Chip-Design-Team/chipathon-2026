@@ -4,6 +4,41 @@ Open ideas for future notebook cells, model extensions, or verification experime
 
 ---
 
+## PSRAM Interface
+
+### FIFO requirement analysis
+
+**Conclusion: no FIFO needed at the design operating points.**
+
+Key timing at 32 MHz system clock, 125 kS/s sample rate (BW=125 kHz baseband):
+
+| Operation | Cycles | Time |
+|---|---|---|
+| Sample period (125 kS/s) | 256 | 8 µs |
+| QPI write — 8 bytes, 16-bit mode | 24 | 750 ns |
+| QPI read — 8 bytes, fast quad | 30 | 938 ns |
+| Write + read interleaved (REPLAY) | 54 | 1.69 µs |
+
+Bus utilisation during REPLAY (worst case): 54/256 = **21%**. There are 202 idle cycles between every write+read pair. Samples arrive every 256 cycles; the controller finishes each transaction and is waiting long before the next `iq_valid` strobe. Nothing accumulates.
+
+A FIFO is only needed when samples arrive faster than the PSRAM can accept them. Here the relationship is inverted — PSRAM can accept a sample in 750 ns, new samples arrive every 8 µs.
+
+The single timing boundary that does exist (`iq_valid` from the decimator into the QPI controller) is resolved by a single synchronisation register, not a FIFO, because both sides use the same 32 MHz clock.
+
+**When a FIFO would become necessary:**
+
+Running at 1 MS/s (os_factor=8, pre-decimation) in 32-bit mode with 4 branches:
+
+```
+4 branches × 4 bytes × 1 MS/s = 16 MB/s
+QPI write per sample = 40 cycles = 1.25 µs
+Sample period = 32 cycles = 1 µs   ← controller cannot keep up
+```
+
+A 4–8 sample deep FIFO would be needed to absorb burst overlap. This is why the spec caps 32-bit mode at 500 kS/s — at that rate the write takes 1.25 µs and samples arrive every 2 µs, restoring margin. If the design is ever extended to capture pre-decimation samples at full rate, add a small FIFO between the sigma-delta output and the QPI write engine.
+
+---
+
 ## In Progress
 
 ### Capture handoff implementation risks
